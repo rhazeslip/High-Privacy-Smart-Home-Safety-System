@@ -1,0 +1,16 @@
+//Minimal React snippet to fetch status and alerts from the Edge Hub.
+useEffect(() => {
+  async function load() {
+    const s = await fetch("http://127.0.0.1:8000/status").then(r=>r.json());
+    setStatus(s);
+    const a = await fetch("http://127.0.0.1:8000/alerts").then(r=>r.json());
+    setAlerts(a);
+  }
+  load();
+  const id = setInterval(load, 3000);
+  return () => clearInterval(id);
+}, []);
+
+async function ack(id){
+  await fetch(`http://127.0.0.1:8000/alerts/${id}/ack`, {method:"POST"});
+}
