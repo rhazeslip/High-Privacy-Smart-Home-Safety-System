@@ -36,3 +36,20 @@ class StatusResponse(BaseModel):
     system: str = "running"
     sensors_online: int = 0
     alerts_open: int = 0
+
+# Auth-related models for login/token and user info.
+
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class UserInfo(BaseModel):
+    username: str
+    role: Literal["Admin","Occupant"]
