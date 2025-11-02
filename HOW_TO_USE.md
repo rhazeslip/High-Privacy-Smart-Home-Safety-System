@@ -1,4 +1,4 @@
-1. Project Structure
+**1. Project Structure**
 High-Privacy-Smart-Home-Safety-System/
 │
 ├── backend/                # FastAPI server (Edge Hub)
@@ -21,7 +21,7 @@ High-Privacy-Smart-Home-Safety-System/
 ├── README.md
 └── HOW_TO_USE.md           # (this file)
 
-2. Environment Setup (First Time Only)
+**2. Environment Setup (First Time Only)**
 Step 1. Create and activate virtual environment
 cd High-Privacy-Smart-Home-Safety-System
 py -m venv .venv
@@ -37,7 +37,7 @@ If you still get an error, re-run:
 
 pip install bcrypt==3.2.2
 
-3. HTTPS Certificate Setup
+**3. HTTPS Certificate Setup**
 
 Certificates are not committed to GitHub for security.
 Each teammate must generate their own self-signed certificate locally.
@@ -58,7 +58,7 @@ Now you will have two new files:
 key.pem
 cert.pem
 
-4. Run the Backend (Edge Hub Server)
+**4. Run the Backend (Edge Hub Server)**
 
 Run FastAPI with HTTPS:
 
@@ -79,7 +79,7 @@ You should see:
   "alerts_open": 0
 }
 
-5. Login / Authentication (JWT)
+**5. Login / Authentication (JWT)**
 Available demo accounts
 Username	Password	Role
 admin	admin123	Admin
@@ -108,7 +108,7 @@ Example (acknowledge alert):
 curl -X POST https://127.0.0.1:8443/alerts/<ALERT_ID>/ack -k ^
 -H "Authorization: Bearer <JWT_TOKEN>"
 
-6. Run the Sensor Simulator
+**6. Run the Sensor Simulator**
 Example 1: Continuous mixed simulation
 python Simulation/simulation.py --scenario continuous --interval 5
 
@@ -125,7 +125,7 @@ Example:
 
 python Simulation/simulation.py --base-url https://127.0.0.1:8443 --scenario fire
 
-7. Front-End Integration (React)
+**7. Front-End Integration (React)**
 
 Fetch /status to display system summary
 
@@ -142,12 +142,12 @@ cors_origins = [
     "https://127.0.0.1:8443"
 ]
 
-8. Testing Accounts & Permissions
+**8. Testing Accounts & Permissions**
 Role	Can Acknowledge Alerts	Can Configure Sensors	Can View Alerts
 Admin	✅	✅	✅
 Occupant	✅	❌	✅
-9. Notes for GitHub Version Control
 
+**9. Notes for GitHub Version Control**
 Do NOT commit these files or folders:
 
 .venv/
