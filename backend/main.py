@@ -1,14 +1,22 @@
 # backend/main.py
 # FastAPI app for HP-SHSS Edge Hub
 
-from fastapi import FastAPI, HTTPException, Depends, Header
 from typing import List, Optional
-from .models import SensorReading, Alert, StatusResponse, LoginRequest, Token, UserInfo
-from .store import save_reading, list_alerts, acknowledge_alert, count_open_alerts, SENSOR_LAST
-from .logic import process_reading
-from .config import get_settings
-from .security import create_access_token, decode_token
-from .users import check_credentials, get_user
+from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi.middleware.cors import CORSMiddleware
+from backend.logic import process_reading
+from backend.config import get_settings
+from backend.security import create_access_token, decode_token
+from backend.users import check_credentials
+
+#  Absolute imports so we can run "uvicorn backend.main:app" from project root.
+from backend.models import (
+    SensorReading, Alert, StatusResponse, LoginRequest, Token, UserInfo
+)
+from backend.store import (
+    save_reading, list_alerts, acknowledge_alert, count_open_alerts, SENSOR_LAST
+)
+
 
 S = get_settings()
 app = FastAPI(title=S.project_name, debug=S.debug)
