@@ -17,7 +17,7 @@ class TestAuthentication:
         })
         assert response.status_code == 401
 
-    def test_protected_endpoint_without_authentication(self, test_cient):
+    def test_protected_endpoint_without_authentication(self, test_client):
         response = test_client.get("/alerts")
 
         assert response.status_code == 401

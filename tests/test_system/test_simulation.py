@@ -1,4 +1,4 @@
-import pytest 
+import pytest
 import time
 from Simulation.simulation import SensorSimulator
 

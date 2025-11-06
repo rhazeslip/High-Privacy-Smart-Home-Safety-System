@@ -22,23 +22,23 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["ok"] == True
-        assert "alert_generated" in data
+        assert "alerts_created" in data
         assert "alert_ids" in data
 
-    def test_alerts_endpoint(self, test_client, authentication_headers):
+    def test_alerts_endpoint(self, test_client, auth_headers):
         test_client.post("/sensor", json={
             "sensor_id": "alert_test",
             "type": "door",
             "value": "open",
             "location": "Alert Test Room"
         })
-        response = test_client.get("/alerts", headers=authentication_headers)
+        response = test_client.get("/alerts", headers=auth_headers)
 
         assert response.status_code == 200
         alerts = response.json()
         assert isinstance(alerts, list)
 
-    def test_alert_acknowledgment(self, test_client, authentication_headers):
+    def test_alert_acknowledgment(self, test_client, auth_headers):
         sensor_response = test_client.post("/sensor", json ={
             "sensor_id": "ack_test",
             "type": "door",
@@ -48,6 +48,6 @@ class TestAPIEndpoints:
         alert_id = sensor_response.json()["alert_ids"][0]
 
         ack_response = test_client.post(f"/alerts/{alert_id}/ack",
-                                        headers=authentication_headers)
+                                        headers=auth_headers)
         assert ack_response.status_code == 200
         assert ack_response.json()["ok"] == True
