@@ -106,6 +106,35 @@ Replace the in-memory storage (store.py) with SQLite or MQTT for real devices.
 Authentication:
 Add user login and JWT-based authentication to align with SRS FR-18 to FR-22.
 
-10. Stopping the Server
+10. Security and HTTPS (recommended)
+
+For a high level of security in local/edge deployments, run the Edge Hub with HTTPS
+and use a strong JWT secret set via environment variables. The project includes a
+simple self-signed certificate generator in `tools/make_selfsigned_cert.py` and the
+repository root contains `cert.pem` and `key.pem` for local testing.
+
+Run uvicorn with TLS:
+
+```powershell
+& .\.venv\Scripts\Activate.ps1
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --ssl-certfile cert.pem --ssl-keyfile key.pem
+```
+
+Set a strong JWT secret in the environment before starting the server (this
+prevents the server from generating a new secret at each restart):
+
+```powershell
+$env:HP_SHSS_JWT_SECRET = 'a-very-long-random-secret'
+```
+
+Notes:
+- The backend now sets the access token as an HttpOnly, Secure cookie named
+  `hp_token`. The frontend should send credentials (cookies) with requests.
+- By default access tokens are short-lived (15 minutes). Consider adding a
+  refresh-token workflow and persistent server-side revocation storage for
+  production.
+- In production, use certificates issued by a trusted CA (not self-signed).
+
+11. Stopping the Server
 
 To stop the Edge Hub, press CTRL + C in the terminal where uvicorn is running.

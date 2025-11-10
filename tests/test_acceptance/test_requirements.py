@@ -1,9 +1,9 @@
 import pytest
-from datatime import datetime
+from datetime import datetime
 
 class TestAcceptanceCriteria:
     def test_alert_latency_requirement(self, test_client):
-        start_time = datatime.now()
+        start_time = datetime.now()
 
         test_client.post("/sensor", json={
             "sensor_id": "latency_test",

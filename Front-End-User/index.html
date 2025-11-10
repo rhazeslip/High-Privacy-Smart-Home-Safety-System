@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HP-SHSS — Home Safety Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>HP-SHSS</h1>
+      </div>
+      <nav class="nav">
+        <button class="nav-item" data-page="dashboard">Dashboard</button>
+        <button class="nav-item" data-page="devices">Devices</button>
+        <button class="nav-item" data-page="history">Alerts & History</button>
+        <button class="nav-item" data-page="settings">Settings</button>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="logout" class="logout-btn hide">Logout</button>
+      </div>
+    </aside>
+    <main class="main-content">
+      <!-- Login Page -->
+      <section id="login-page" class="page active">
+        <div class="login-card">
+          <h2>Sign in</h2>
+          <form id="login-form">
+            <label>Username <input id="username" name="username" required></label>
+            <label>Password <input id="password" name="password" type="password" required></label>
+            <div><button type="submit">Sign in</button></div>
+            <div class="error" id="login-error"></div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Dashboard Page -->
+      <section id="dashboard-page" class="page">
+        <h2>Dashboard Overview</h2>
+        <div class="dashboard-status-cards">
+          <div class="status-card">
+            <div class="status-title">Sensors Online</div>
+            <div class="status-value" id="sensors-online">-</div>
+          </div>
+          <div class="status-card">
+            <div class="status-title">Active Alerts</div>
+            <div class="status-value" id="active-alert-count">-</div>
+          </div>
+          <div class="status-card">
+            <div class="status-title">Last Update</div>
+            <div class="status-value" id="last-update-time">-</div>
+          </div>
+        </div>
+        <div class="dashboard-section">
+          <h3>Active Alerts</h3>
+          <div class="alerts-filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="critical">Critical</button>
+            <button class="filter-btn" data-filter="warning">Warning</button>
+            <button class="filter-btn" data-filter="info">Info</button>
+          </div>
+          <div id="alerts-list" class="alerts-list"></div>
+        </div>
+        <div class="dashboard-section">
+          <h3>Recent Alerts Stream</h3>
+          <div id="alerts-stream" class="alerts-stream"></div>
+        </div>
+      </section>
+
+      <!-- Devices Page -->
+      <section id="devices-page" class="page">
+        <h2>Devices</h2>
+        <div id="devices-grid" class="devices-grid"></div>
+      </section>
+
+      <!-- Alerts & History Page -->
+      <section id="history-page" class="page">
+        <h2>Alert History</h2>
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Level</th>
+              <th>Location</th>
+              <th>Message</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="history-list"></tbody>
+        </table>
+      </section>
+
+      <!-- Settings Page -->
+      <section id="settings-page" class="page">
+        <h2>Settings</h2>
+        <form id="settings-form">
+          <label><input type="checkbox" id="arm-system"> Armed</label>
+          <label>Mode
+            <select id="mode">
+              <option value="home">Home</option>
+              <option value="away">Away</option>
+              <option value="night">Night</option>
+            </select>
+          </label>
+          <label>Notify Email <input id="notify_email" type="email"></label>
+          <label><input type="checkbox" id="notify_critical"> Notify on Critical Alerts</label>
+          <label><input type="checkbox" id="notify_all"> Notify on All Alerts</label>
+          <label>Auto Arm (minutes)
+            <input id="auto_arm" type="number" min="0" max="120" value="0">
+          </label>
+          <label><input type="checkbox" id="auto_night_mode"> Auto Night Mode</label>
+          <div><button type="submit">Save Settings</button></div>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script src="js/api.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

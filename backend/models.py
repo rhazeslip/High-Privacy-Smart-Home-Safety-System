@@ -48,7 +48,9 @@ class Token(BaseModel):
 
 class LoginRequest(BaseModel):
     username: str
-    password: str
+    # Either provide `password` (legacy) or `client_hash` (PBKDF2 hex) derived with server salt.
+    password: Optional[str] = None
+    client_hash: Optional[str] = None
 
 class UserInfo(BaseModel):
     username: str

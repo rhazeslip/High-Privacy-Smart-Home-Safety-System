@@ -4,6 +4,37 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.store import ALERTS, SENSOR_LAST
 
+
+@pytest.fixture(autouse=True)
+def clear_store_every_test():
+    # Ensure each test runs with a clean in-memory and persisted store.
+    try:
+        from backend import store as _store
+        ALERTS.clear()
+        SENSOR_LAST.clear()
+        cur = _store._DB.cursor()
+        cur.execute("DELETE FROM alerts")
+        cur.execute("DELETE FROM sensors")
+        cur.execute("DELETE FROM refresh_tokens")
+        cur.execute("DELETE FROM settings")
+        _store._DB.commit()
+    except Exception:
+        pass
+    yield
+    # cleanup after test as well
+    try:
+        from backend import store as _store
+        ALERTS.clear()
+        SENSOR_LAST.clear()
+        cur = _store._DB.cursor()
+        cur.execute("DELETE FROM alerts")
+        cur.execute("DELETE FROM sensors")
+        cur.execute("DELETE FROM refresh_tokens")
+        cur.execute("DELETE FROM settings")
+        _store._DB.commit()
+    except Exception:
+        pass
+
 @pytest.fixture(scope="function")
 def test_client():
     ALERTS.clear()

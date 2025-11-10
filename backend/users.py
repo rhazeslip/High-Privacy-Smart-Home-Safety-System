@@ -1,30 +1,42 @@
-# Simple in-memory user store with roles (Admin/Occupant).
+"""DB-backed user helpers.
 
-from typing import Optional, Dict
+This module delegates persistence to `backend.store` (SQLite). It keeps the
+same function names/signatures used elsewhere in the codebase so existing
+callers (tests and auth routes) continue to work.
+"""
+
+from typing import Optional
 from .security import hash_password, verify_password
+from . import store
 
-# Demo users (username -> {hashed_pw, role})
-_USERS: Dict[str, dict] = {
-    "admin":   {"hashed_pw": hash_password("admin123"),   "role": "Admin"},
-    "alice":   {"hashed_pw": hash_password("alice123"),   "role": "Occupant"},
-}
 
 def get_user(username: str) -> Optional[dict]:
-    # Return user record by username.
-    return _USERS.get(username)
+    """Return user record by username or None.
+
+    The returned dict has keys: 'username', 'hashed_pw', 'role'.
+    """
+    return store.db_get_user(username)
+
 
 def check_credentials(username: str, password: str) -> Optional[str]:
-    # Validate credentials; return role if ok.
+    """Validate credentials; return role if ok.
+
+    Returns None on failure.
+    """
     user = get_user(username)
-    if not user: 
+    if not user:
+        return None
+    if password is None:
+        # No password provided — do not authenticate.
         return None
     if verify_password(password, user["hashed_pw"]):
         return user["role"]
     return None
 
+
 def create_user(username: str, password: str, role: str = "Occupant") -> bool:
-    # Create new user if not exists.
-    if username in _USERS:
+    """Create new user if not exists. Password is hashed before storing."""
+    if store.db_get_user(username):
         return False
-    _USERS[username] = {"hashed_pw": hash_password(password), "role": role}
-    return True
+    hashed = hash_password(password)
+    return store.db_create_user(username, hashed, role)
