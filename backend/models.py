@@ -47,7 +47,7 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 class LoginRequest(BaseModel):
-    username: str
+    username: Optional[str] = None  # Optional for password-only mode
     # Either provide `password` (legacy) or `client_hash` (PBKDF2 hex) derived with server salt.
     password: Optional[str] = None
     client_hash: Optional[str] = None
@@ -55,3 +55,32 @@ class LoginRequest(BaseModel):
 class UserInfo(BaseModel):
     username: str
     role: Literal["Admin","Occupant"]
+
+
+# Setup wizard models
+class SetupStatus(BaseModel):
+    setup_complete: bool
+    home_name: Optional[str] = None
+
+class SetupRequest(BaseModel):
+    home_name: str
+    admin_password: str
+    confirm_password: str
+
+class SetupResponse(BaseModel):
+    success: bool
+    recovery_key: str
+    message: str
+
+class PasswordResetRequest(BaseModel):
+    recovery_key: str
+    new_password: str
+    confirm_password: str
+
+class PasswordResetResponse(BaseModel):
+    success: bool
+    message: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password_hash: str
+    new_password: str

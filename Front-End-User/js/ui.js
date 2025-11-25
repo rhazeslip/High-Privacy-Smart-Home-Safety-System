@@ -20,29 +20,66 @@ const ui = {
                 this.showPage(page);
                 // Trigger page-specific data loading
                 if (window.app) {
-                    if (page === 'devices') window.app.loadDevices();
-                    else if (page === 'history') window.app.loadHistory();
-                    else if (page === 'settings') window.app.loadSettings();
+                    // Stop any existing refresh intervals
+                    if (window.app.devicesRefreshInterval) {
+                        clearInterval(window.app.devicesRefreshInterval);
+                        window.app.devicesRefreshInterval = null;
+                    }
+                    
+                    // Use setTimeout to ensure page is rendered before loading data
+                    setTimeout(() => {
+                        if (page === 'devices') {
+                            window.app.loadDevices();
+                            // Start auto-refresh for devices page (every 5 seconds)
+                            window.app.devicesRefreshInterval = setInterval(() => {
+                                window.app.loadDevices();
+                            }, 5000);
+                        }
+                        else if (page === 'history') window.app.loadHistory();
+                        else if (page === 'settings') window.app.loadSettings();
+                    }, 0);
                 }
             });
         });
     },
 
     showPage(pageId) {
+        console.log('showPage called with:', pageId);
+        console.log('window.app exists:', !!window.app);
+        console.log('isAuthenticated:', window.app?.isAuthenticated);
+        
         // If trying to access a protected page while unauthenticated, force login
         const protectedPages = ['dashboard', 'devices', 'history', 'settings'];
         if (protectedPages.includes(pageId) && window.app && !window.app.isAuthenticated) {
+            console.log('Auth check failed, redirecting to login');
             pageId = 'login';
         }
 
+        console.log('Final pageId:', pageId);
+        
+        // Clear password field when navigating away from login page
+        if (pageId !== 'login') {
+            const passwordField = document.getElementById('password');
+            if (passwordField) {
+                passwordField.value = '';
+            }
+        }
+        
         // Update navigation active state
         document.querySelectorAll('.nav-item').forEach(item => {
             item.classList.toggle('active', item.dataset.page === pageId);
         });
 
         // Show selected page element (ids are like 'dashboard-page')
+        const targetPageId = `${pageId}-page`;
+        console.log('Looking for page with id:', targetPageId);
+        
         document.querySelectorAll('.page').forEach(page => {
-            page.classList.toggle('active', page.id === `${pageId}-page`);
+            const isActive = page.id === targetPageId;
+            page.classList.toggle('active', isActive);
+            if (isActive) {
+                console.log('Activated page:', page.id);
+            }
         });
     },
 
@@ -62,7 +99,7 @@ const ui = {
                             <button class="alert-ack-btn" data-alert-id="${alert.id}">
                                 Acknowledge
                             </button>
-                        ` : '<span class="acknowledged-badge">✓ Acknowledged</span>'}
+                        ` : '<span class="acknowledged-badge">Acknowledged</span>'}
                     </div>
                 </div>
             </div>
@@ -71,32 +108,66 @@ const ui = {
 
     getAlertIcon(level) {
         switch(level.toLowerCase()) {
-            case 'critical': return '⚠️';
-            case 'warning': return '⚡';
-            case 'info': return 'ℹ️';
-            default: return '📝';
+            case 'critical': return '!';
+            case 'warning': return '!';
+            case 'info': return 'i';
+            default: return '*';
         }
     },
 
     // Devices
     renderDevice(device) {
+        // Handle both registered device format and sensor reading format
+        const deviceValue = device.current_value !== undefined ? device.current_value : device.value;
+        const lastUpdate = device.last_reading || device.last_update;
+        const deviceName = device.name || `${device.type.capitalize()} - ${device.location}`;
+        
+        // Format the device value based on type
+        let valueDisplay = deviceValue !== undefined ? deviceValue : 'N/A';
+        if (device.type === 'temp' && deviceValue !== undefined) {
+            valueDisplay = `${deviceValue}°C`;
+        } else if (device.type === 'door' || device.type === 'window' || device.type === 'garage') {
+            valueDisplay = deviceValue === 'open' ? 'Open' : deviceValue === 'closed' ? 'Closed' : 'N/A';
+        } else if (device.type === 'smoke' || device.type === 'fire' || device.type === 'co' || device.type === 'gas') {
+            valueDisplay = deviceValue !== undefined ? `${deviceValue} ppm` : 'N/A';
+        } else if (device.type === 'water') {
+            valueDisplay = deviceValue > 0 ? 'Detected' : deviceValue === 0 ? 'No Water' : 'N/A';
+        }
+        
         return `
             <div class="device-card">
                 <div class="device-header">
-                    <span class="device-name">${device.name}</span>
-                    <span class="device-status ${device.online ? 'online' : 'offline'}">
-                        ${device.online ? 'Online' : 'Offline'}
+                    <span class="device-name">${deviceName}</span>
+                    <span class="device-status ${device.online ? 'online' : device.paired ? 'offline' : 'unpaired'}">
+                        ${device.online ? 'Online' : device.paired ? 'Offline' : 'Unpaired'}
                     </span>
+                </div>
+                <div class="device-info">
+                    <div class="device-type">${device.type.toUpperCase()}</div>
+                    <div class="device-location">${device.location}</div>
+                </div>
+                <div class="device-reading">
+                    <div class="reading-label">Current Value</div>
+                    <div class="reading-value">${valueDisplay}</div>
                 </div>
                 <div class="device-details">
                     <div class="detail-item">
-                        <div class="detail-label">Status</div>
-                        <div class="detail-value">${device.value}%</div>
+                        <div class="detail-label">Battery</div>
+                        <div class="detail-value">${device.battery || 100}%</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Signal</div>
+                        <div class="detail-value">${device.signal_strength || 100}%</div>
                     </div>
                     <div class="detail-item">
                         <div class="detail-label">Last Update</div>
-                        <div class="detail-value">${new Date(device.last_update).toLocaleTimeString()}</div>
+                        <div class="detail-value">${lastUpdate ? new Date(lastUpdate).toLocaleTimeString() : 'Never'}</div>
                     </div>
+                </div>
+                <div class="device-actions">
+                    <button class="device-edit-btn" data-device-id="${device.device_id || device.id}" data-device='${JSON.stringify(device).replace(/'/g, "&apos;")}'>
+                        Edit
+                    </button>
                 </div>
             </div>
         `;

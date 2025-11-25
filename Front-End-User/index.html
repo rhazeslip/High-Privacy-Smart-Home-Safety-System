@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>HP-SHSS — Home Safety Dashboard</title>
+  <title>Home</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="css/components.css">
 </head>
@@ -11,7 +11,7 @@
   <div class="app-container">
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h1>HP-SHSS</h1>
+        <h1 id="home-name-display">My Home</h1>
       </div>
       <nav class="nav">
         <button class="nav-item" data-page="dashboard">Dashboard</button>
@@ -23,31 +23,124 @@
         <button id="logout" class="logout-btn hide">Logout</button>
       </div>
     </aside>
+    
+    <!-- Hamburger Menu Button -->
+    <button id="hamburger-menu" class="hamburger-menu" aria-label="Toggle menu">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+    
     <main class="main-content">
       <!-- Login Page -->
-      <section id="login-page" class="page active">
+      <section id="login-page" class="page">
         <div class="login-card">
           <h2>Sign in</h2>
           <form id="login-form">
-            <label>Username <input id="username" name="username" required></label>
-            <label>Password <input id="password" name="password" type="password" required></label>
+            <label>Password <input id="password" name="password" type="password" autocomplete="off" required></label>
             <div><button type="submit">Sign in</button></div>
             <div class="error" id="login-error"></div>
           </form>
+          <div class="forgot-password-link">
+            <a href="#" id="show-reset-link">Forgot password?</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- Password Reset Page -->
+      <section id="reset-page" class="page">
+        <div class="login-card">
+          <h2>Reset Password</h2>
+          <p class="reset-instructions">Enter your recovery key to reset your password.</p>
+          <form id="reset-form">
+            <label>Recovery Key <input id="reset-recovery-key" type="text" required placeholder="Enter recovery key from setup"></label>
+            <label>New Password <input id="reset-new-password" type="password" autocomplete="new-password" minlength="8" required></label>
+            <label>Confirm Password <input id="reset-confirm-password" type="password" autocomplete="new-password" minlength="8" required></label>
+            <div><button type="submit">Reset Password</button></div>
+            <div class="error" id="reset-error"></div>
+          </form>
+          <div class="back-to-login-link">
+            <a href="#" id="back-to-login-link">Back to login</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- Setup Wizard Page -->
+      <section id="setup-page" class="page">
+        <div class="setup-wizard-container">
+          <div class="setup-wizard">
+            <div class="wizard-header">
+              <h1>Welcome to HP-SHSS</h1>
+              <p>High-Privacy Smart Home Safety System</p>
+            </div>
+
+            <!-- Step 1: Home Name -->
+            <div class="wizard-step" id="setup-step-1">
+              <h2>Step 1: Name Your Home</h2>
+              <p>Give your home a name to personalize your security system.</p>
+              <div class="input-group">
+                <label for="setup-home-name">Home Name</label>
+                <input type="text" id="setup-home-name" placeholder="My Home" required>
+              </div>
+              <button class="btn-primary" id="setup-step-1-next">Next</button>
+            </div>
+
+            <!-- Step 2: Admin Password -->
+            <div class="wizard-step hidden" id="setup-step-2">
+              <h2>Step 2: Set Admin Password</h2>
+              <p>Create a strong password to secure your system. This password will be required to access the system.</p>
+              <div class="input-group">
+                <label for="setup-password">Admin Password (min 8 characters)</label>
+                <input type="password" id="setup-password" autocomplete="new-password" minlength="8" required>
+              </div>
+              <div class="input-group">
+                <label for="setup-confirm-password">Confirm Password</label>
+                <input type="password" id="setup-confirm-password" autocomplete="new-password" minlength="8" required>
+              </div>
+              <div class="password-strength" id="password-strength"></div>
+              <div class="wizard-actions">
+                <button class="btn-secondary" id="setup-step-2-back">Back</button>
+                <button class="btn-primary" id="setup-step-2-complete">Complete Setup</button>
+              </div>
+            </div>
+
+            <!-- Step 3: Recovery Key -->
+            <div class="wizard-step hidden" id="setup-step-3">
+              <h2>Setup Complete!</h2>
+              <p class="success-message">Your system has been configured successfully.</p>
+              
+              <div class="recovery-key-section">
+                <h3>Important: Save Your Recovery Key</h3>
+                <p>This key can be used to recover access if you forget your password. Store it in a secure location.</p>
+                <div class="recovery-key-display">
+                  <code id="recovery-key-text"></code>
+                  <button class="btn-secondary" id="copy-recovery-key-btn">Copy to Clipboard</button>
+                </div>
+                <label class="recovery-confirm">
+                  <input type="checkbox" id="recovery-confirmed">
+                  I have saved my recovery key in a secure location
+                </label>
+              </div>
+
+              <button class="btn-primary" id="finish-setup-btn" disabled>Continue to Dashboard</button>
+            </div>
+          </div>
         </div>
       </section>
 
       <!-- Dashboard Page -->
       <section id="dashboard-page" class="page">
-        <h2>Dashboard Overview</h2>
+        <div class="page-header">
+          <h2>Dashboard Overview</h2>
+        </div>
         <div class="dashboard-status-cards">
+          <div class="status-card">
+            <div class="status-title">Total Devices</div>
+            <div class="status-value" id="total-devices">-</div>
+          </div>
           <div class="status-card">
             <div class="status-title">Sensors Online</div>
             <div class="status-value" id="sensors-online">-</div>
-          </div>
-          <div class="status-card">
-            <div class="status-title">Active Alerts</div>
-            <div class="status-value" id="active-alert-count">-</div>
           </div>
           <div class="status-card">
             <div class="status-title">Last Update</div>
@@ -72,13 +165,72 @@
 
       <!-- Devices Page -->
       <section id="devices-page" class="page">
-        <h2>Devices</h2>
+        <div class="page-header">
+          <h2>Devices</h2>
+          <div style="display: flex; gap: 0.75rem;">
+            <button id="refresh-devices-btn" class="btn-secondary">Refresh</button>
+            <button id="open-device-setup-btn" class="btn-primary">Add Device</button>
+          </div>
+        </div>
         <div id="devices-grid" class="devices-grid"></div>
       </section>
 
+      <!-- Device Setup Modal -->
+      <div id="device-setup-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Device Setup Wizard</h2>
+            <button class="modal-close" id="close-device-setup-btn">&times;</button>
+          </div>
+          <div class="setup-controls">
+            <button id="scan-devices-btn" class="btn-primary">Scan for Devices</button>
+          </div>
+          <div id="scan-status"></div>
+          <div class="setup-step">
+            <h3>Discovered Devices</h3>
+            <div id="discovered-devices">
+              <p class="empty-state">No devices discovered yet. Click "Scan for Devices" above.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Device Edit Modal -->
+      <div id="device-edit-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Edit Device</h2>
+            <button class="modal-close" id="close-device-edit-btn">&times;</button>
+          </div>
+          <form id="device-edit-form">
+            <div class="form-group">
+              <label for="edit-device-name">Device Name</label>
+              <input type="text" id="edit-device-name" required placeholder="e.g., Front Door">
+            </div>
+            <div class="form-group">
+              <label for="edit-device-location">Location</label>
+              <input type="text" id="edit-device-location" required placeholder="e.g., Entrance">
+            </div>
+            <div class="device-edit-info">
+              <p><strong>Device ID:</strong> <span id="edit-device-id"></span></p>
+              <p><strong>Type:</strong> <span id="edit-device-type"></span></p>
+              <p><strong>Port:</strong> <span id="edit-device-port"></span></p>
+              <p><strong>Status:</strong> <span id="edit-device-paired"></span></p>
+            </div>
+            <div class="modal-actions">
+              <button type="submit" class="btn-primary">Save Changes</button>
+              <button type="button" class="btn-warning" id="unpair-device-btn">Unpair Device</button>
+              <button type="button" class="btn-primary" id="repair-device-btn" style="display:none;">Repair Device</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
       <!-- Alerts & History Page -->
       <section id="history-page" class="page">
-        <h2>Alert History</h2>
+        <div class="page-header">
+          <h2>Alert History</h2>
+        </div>
         <table class="history-table">
           <thead>
             <tr>
@@ -95,25 +247,62 @@
 
       <!-- Settings Page -->
       <section id="settings-page" class="page">
-        <h2>Settings</h2>
-        <form id="settings-form">
-          <label><input type="checkbox" id="arm-system"> Armed</label>
-          <label>Mode
-            <select id="mode">
-              <option value="home">Home</option>
-              <option value="away">Away</option>
-              <option value="night">Night</option>
-            </select>
-          </label>
-          <label>Notify Email <input id="notify_email" type="email"></label>
-          <label><input type="checkbox" id="notify_critical"> Notify on Critical Alerts</label>
-          <label><input type="checkbox" id="notify_all"> Notify on All Alerts</label>
-          <label>Auto Arm (minutes)
-            <input id="auto_arm" type="number" min="0" max="120" value="0">
-          </label>
-          <label><input type="checkbox" id="auto_night_mode"> Auto Night Mode</label>
-          <div><button type="submit">Save Settings</button></div>
-        </form>
+        <div class="page-header">
+          <h2>Settings</h2>
+        </div>
+        
+        <!-- General Settings -->
+        <div class="settings-section">
+          <h3>General</h3>
+          <div class="settings-card">
+            <label>
+              Home Name
+              <input id="setting-home-name" type="text" placeholder="My Home">
+            </label>
+            <p class="setting-description">Give your home a custom name</p>
+          </div>
+          
+          <div class="settings-card">
+            <label>
+              Theme
+              <select id="setting-theme">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="auto">Auto (System)</option>
+              </select>
+            </label>
+            <p class="setting-description">Choose your preferred color theme</p>
+          </div>
+        </div>
+        
+        <!-- Security Settings -->
+        <div class="settings-section">
+          <h3>Security</h3>
+          <div class="settings-card">
+            <h4>Change Password</h4>
+            <form id="change-password-form">
+              <label>
+                Current Password
+                <input id="setting-current-password" type="password" autocomplete="current-password" required>
+              </label>
+              <label>
+                New Password (min 8 characters)
+                <input id="setting-new-password" type="password" autocomplete="new-password" minlength="8" required>
+              </label>
+              <label>
+                Confirm New Password
+                <input id="setting-confirm-password" type="password" autocomplete="new-password" minlength="8" required>
+              </label>
+              <div class="error" id="password-change-error"></div>
+              <button type="submit" class="btn-primary">Update Password</button>
+            </form>
+          </div>
+        </div>
+        
+        <!-- Save Button -->
+        <div class="settings-actions">
+          <button id="save-settings-btn" class="btn-primary">Save Settings</button>
+        </div>
       </section>
     </main>
   </div>

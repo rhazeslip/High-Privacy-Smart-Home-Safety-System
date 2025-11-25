@@ -1,4 +1,5 @@
 // API wrapper for making authenticated requests
+// Version: 1.2 - Added unpair and repair device methods
 const api = {
     base: location.origin.replace(/:\d+$/, ':8000').replace('http:', 'https:') || 'https://127.0.0.1:8000',
     
@@ -30,21 +31,22 @@ const api = {
     },
 
     // Get per-user salt from server (base64)
-    async getSalt(username) {
-        return this.request(`/auth/salt?username=${encodeURIComponent(username)}`);
+    async getSalt(username = null) {
+        const url = username ? `/auth/salt?username=${encodeURIComponent(username)}` : '/auth/salt';
+        return this.request(url);
     },
 
     // Auth endpoints: login now performs client-side PBKDF2 using salt returned from server
-    async login(username, password) {
-        // Fetch salt for the username
+    async login(password, username = null) {
+        // Fetch salt (defaults to admin user if no username)
         const saltResp = await this.getSalt(username);
         const salt = saltResp && saltResp.salt;
-        if (!salt) throw new Error('Unable to retrieve salt for user');
+        if (!salt) throw new Error('Unable to retrieve salt');
         const client_hash = await this._deriveClientHash(password, salt);
         // Send client_hash (hex) to login endpoint
         return this.request('/auth/login', {
             method: 'POST',
-            body: JSON.stringify({ username, client_hash })
+            body: JSON.stringify({ username, client_hash, password: null })
         });
     },
 
@@ -85,5 +87,105 @@ const api = {
     // Devices
     async getDevices() {
         return this.request('/devices');
+    },
+
+    // Device Discovery and Pairing
+    async discoverDevices(startPort = 8080, count = 20) {
+        return this.request(`/devices/discover?start_port=${startPort}&count=${count}`);
+    },
+
+    async pairDevice(deviceId, port, pairingCode = null, name = null, location = null) {
+        return this.request('/devices/pair', {
+            method: 'POST',
+            body: JSON.stringify({
+                device_id: deviceId,
+                port: port,
+                pairing_code: pairingCode,
+                name: name,
+                location: location
+            })
+        });
+    },
+
+    async getRegisteredDevices() {
+        return this.request('/devices/registered');
+    },
+
+    async updateDevice(deviceId, updates) {
+        return this.request(`/devices/${deviceId}`, {
+            method: 'PUT',
+            body: JSON.stringify(updates)
+        });
+    },
+
+    async removeDevice(deviceId) {
+        return this.request(`/devices/${deviceId}`, {
+            method: 'DELETE'
+        });
+    },
+
+    async unpairDevice(deviceId) {
+        return this.request(`/devices/${deviceId}/unpair`, {
+            method: 'POST'
+        });
+    },
+
+    async repairDevice(deviceId, port, pairingCode) {
+        return this.request(`/devices/${deviceId}/repair`, {
+            method: 'POST',
+            body: JSON.stringify({
+                port: port,
+                pairing_code: pairingCode
+            })
+        });
+    },
+
+    async getDeviceStatus(deviceId) {
+        return this.request(`/devices/${deviceId}/status`);
+    },
+
+    // Setup wizard
+    async getSetupStatus() {
+        return this.request('/setup/status');
+    },
+
+    async completeSetup(homeName, adminPassword, confirmPassword) {
+        return this.request('/setup/complete', {
+            method: 'POST',
+            body: JSON.stringify({
+                home_name: homeName,
+                admin_password: adminPassword,
+                confirm_password: confirmPassword
+            })
+        });
+    },
+
+    async resetPassword(recoveryKey, newPassword, confirmPassword) {
+        return this.request('/auth/reset-password', {
+            method: 'POST',
+            body: JSON.stringify({
+                recovery_key: recoveryKey,
+                new_password: newPassword,
+                confirm_password: confirmPassword
+            })
+        });
+    },
+
+    async changePassword(currentPassword, newPassword) {
+        // Get salt for current user
+        const saltResp = await this.getSalt();
+        const salt = saltResp && saltResp.salt;
+        if (!salt) throw new Error('Unable to retrieve salt');
+        
+        // Hash current password with salt
+        const currentHash = await this._deriveClientHash(currentPassword, salt);
+        
+        return this.request('/auth/change-password', {
+            method: 'POST',
+            body: JSON.stringify({
+                current_password_hash: currentHash,
+                new_password: newPassword
+            })
+        });
     }
 };

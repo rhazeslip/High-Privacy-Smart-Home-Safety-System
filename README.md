@@ -1,5 +1,5 @@
 # High-Privacy-Smart-Home-Safety-System
-High-Privacy Smart Home Safety System (HP-SHSS)
+High-Privacy Smart Home Safety System
 Edge Hub (Server) Setup and Usage Guide
 1. Overview
 

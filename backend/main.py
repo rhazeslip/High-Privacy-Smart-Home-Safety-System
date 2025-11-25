@@ -12,10 +12,14 @@ from backend.users import check_credentials
 
 #  Absolute imports so we can run "uvicorn backend.main:app" from project root.
 from backend.models import (
-    SensorReading, Alert, StatusResponse, LoginRequest, Token, UserInfo
+    SensorReading, Alert, StatusResponse, LoginRequest, Token, UserInfo,
+    SetupStatus, SetupRequest, SetupResponse, PasswordResetRequest, PasswordResetResponse,
+    ChangePasswordRequest
 )
 from backend.store import (
-    save_reading, list_alerts, acknowledge_alert, count_open_alerts, SENSOR_LAST, ALERTS
+    save_reading, list_alerts, acknowledge_alert, count_open_alerts, SENSOR_LAST, ALERTS,
+    is_setup_complete, mark_setup_complete, get_home_name, set_home_name,
+    get_recovery_key, set_recovery_key, get_system_config, set_system_config
 )
 from backend.store import get_home_settings, update_home_settings
 from backend.security import ACCESS_TOKEN_EXPIRE_MIN
@@ -86,7 +90,188 @@ if not S.debug:
         resp.headers['Referrer-Policy'] = 'no-referrer'
         # Minimal CSP for the simple frontend; adjust if you serve scripts from CDNs.
         resp.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        # Ensure Content-Type has UTF-8 charset for JSON responses
+        if 'content-type' in resp.headers and resp.headers['content-type'].startswith('application/json'):
+            resp.headers['content-type'] = 'application/json; charset=utf-8'
         return resp
+
+# Setup wizard endpoints (publicly accessible before setup is complete)
+@app.get("/setup/status", response_model=SetupStatus)
+def get_setup_status():
+    """Check if initial setup has been completed"""
+    return SetupStatus(
+        setup_complete=is_setup_complete(),
+        home_name=get_home_name() if is_setup_complete() else None
+    )
+
+@app.post("/setup/complete", response_model=SetupResponse)
+def complete_setup(setup: SetupRequest):
+    """Complete initial setup wizard"""
+    # Check if setup already completed
+    if is_setup_complete():
+        raise HTTPException(status_code=400, detail="Setup already completed")
+    
+    # Validate passwords match
+    if setup.admin_password != setup.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+    
+    # Validate password strength
+    if len(setup.admin_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    
+    # Generate recovery key (16 random words or UUID-based key)
+    import secrets
+    recovery_key = secrets.token_urlsafe(32)  # 43-character base64url string
+    
+    # Generate salt for password hashing
+    import hashlib
+    import base64
+    import os
+    from backend.security import hash_password
+    
+    salt = os.urandom(16)
+    salt_b64 = base64.b64encode(salt).decode()
+    
+    # Derive client-side hash simulation (in real app, client would do this)
+    client_hash = hashlib.pbkdf2_hmac('sha256', setup.admin_password.encode(), salt, 100000).hex()
+    hashed_password = hash_password(client_hash)
+    
+    # Store admin user with 'admin' as username for compatibility
+    from backend.store import _DB
+    cur = _DB.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO users(username, hashed_pw, role, salt) VALUES (?, ?, ?, ?)",
+        ('admin', hashed_password, 'Admin', salt_b64)
+    )
+    _DB.commit()
+    
+    # Store system configuration
+    set_home_name(setup.home_name)
+    set_recovery_key(recovery_key)
+    set_system_config('admin_salt', salt_b64)
+    mark_setup_complete()
+    
+    return SetupResponse(
+        success=True,
+        recovery_key=recovery_key,
+        message="Setup completed successfully. Please save your recovery key in a secure location."
+    )
+
+@app.post("/auth/reset-password", response_model=PasswordResetResponse)
+def reset_password(reset_req: PasswordResetRequest):
+    """Reset password using recovery key"""
+    # Check if setup is complete
+    if not is_setup_complete():
+        raise HTTPException(status_code=400, detail="System setup not completed")
+    
+    # Validate passwords match
+    if reset_req.new_password != reset_req.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+    
+    # Validate password strength
+    if len(reset_req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    
+    # Verify recovery key
+    stored_key = get_recovery_key()
+    if not stored_key or reset_req.recovery_key != stored_key:
+        raise HTTPException(status_code=401, detail="Invalid recovery key")
+    
+    # Generate new password hash
+    import hashlib
+    import base64
+    import os
+    from backend.security import hash_password
+    from backend.users import get_user
+    
+    # Get existing admin user to preserve salt or generate new one
+    user = get_user('admin')
+    if user and user.get('salt'):
+        salt_b64 = user['salt']
+        salt = base64.b64decode(salt_b64)
+    else:
+        # Generate new salt if somehow missing
+        salt = os.urandom(16)
+        salt_b64 = base64.b64encode(salt).decode()
+    
+    # Derive client-side hash simulation
+    client_hash = hashlib.pbkdf2_hmac('sha256', reset_req.new_password.encode(), salt, 100000).hex()
+    hashed_password = hash_password(client_hash)
+    
+    # Update password in database
+    from backend.store import _DB
+    cur = _DB.cursor()
+    cur.execute(
+        "UPDATE users SET hashed_pw = ?, salt = ? WHERE username = ?",
+        (hashed_password, salt_b64, 'admin')
+    )
+    _DB.commit()
+    
+    # Optionally rotate recovery key for security
+    # import secrets
+    # new_recovery_key = secrets.token_urlsafe(32)
+    # set_recovery_key(new_recovery_key)
+    
+    return PasswordResetResponse(
+        success=True,
+        message="Password reset successfully. Please login with your new password."
+    )
+
+@app.post("/auth/change-password", response_model=PasswordResetResponse)
+def change_password(change_req: ChangePasswordRequest, user: UserInfo = Depends(get_current_user)):
+    """Change password for authenticated user"""
+    from backend.security import hash_password, verify_password
+    from backend.users import get_user
+    from backend.store import _DB
+    import hashlib
+    import base64
+    import os
+    
+    # Get current user from database
+    db_user = get_user(user.username)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify current password
+    stored_hash = db_user.get('hashed_pw')
+    if not stored_hash:
+        raise HTTPException(status_code=400, detail="No password set")
+    
+    # Hash the provided current password hash (since client sends PBKDF2 hash)
+    current_hash_final = hash_password(change_req.current_password_hash)
+    
+    if not verify_password(change_req.current_password_hash, stored_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    
+    # Validate new password strength
+    if len(change_req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    
+    # Get user's salt
+    salt_b64 = db_user.get('salt')
+    if not salt_b64:
+        # Generate new salt if missing
+        salt = os.urandom(16)
+        salt_b64 = base64.b64encode(salt).decode()
+    else:
+        salt = base64.b64decode(salt_b64)
+    
+    # Derive client-side hash for new password
+    new_client_hash = hashlib.pbkdf2_hmac('sha256', change_req.new_password.encode(), salt, 100000).hex()
+    new_hashed_password = hash_password(new_client_hash)
+    
+    # Update password in database
+    cur = _DB.cursor()
+    cur.execute(
+        "UPDATE users SET hashed_pw = ?, salt = ? WHERE username = ?",
+        (new_hashed_password, salt_b64, user.username)
+    )
+    _DB.commit()
+    
+    return PasswordResetResponse(
+        success=True,
+        message="Password changed successfully"
+    )
 
 @app.get("/status", response_model=StatusResponse)
 def status():
@@ -168,24 +353,46 @@ def ack_alert(alert_id: str):
 # Auth routes
 @app.post("/auth/login", response_model=Token)
 def login(req: LoginRequest):
-    # Validate credentials and return a JWT access token.
+    """Login with password (username optional for backward compatibility)"""
+    # Check if setup is complete
+    if not is_setup_complete():
+        raise HTTPException(status_code=400, detail="System setup not completed")
+    
     role = None
+    username = req.username or 'admin'  # Default to admin for password-only mode
+    
     # If client_hash provided, verify against stored bcrypt hash
     if getattr(req, 'client_hash', None):
         from backend.users import get_user
-        user = get_user(req.username)
+        user = get_user(username)
         if not user:
-            raise HTTPException(status_code=401, detail="Invalid username or password")
+            raise HTTPException(status_code=401, detail="Invalid password")
         # stored hashed_pw is bcrypt() of client_hash
         if not verify_password(req.client_hash, user['hashed_pw']):
-            raise HTTPException(status_code=401, detail="Invalid username or password")
+            raise HTTPException(status_code=401, detail="Invalid password")
         role = user.get('role')
     else:
-        # Fallback: legacy password field (plaintext)
-        role = check_credentials(req.username, req.password)
-        if not role:
-            raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = create_access_token(sub=req.username, role=role)
+        # Fallback: legacy password field (plaintext) - convert to client_hash
+        if req.password:
+            import hashlib
+            # Get salt from system config or user record
+            from backend.users import get_user
+            user = get_user(username)
+            if not user or not user.get('salt'):
+                raise HTTPException(status_code=401, detail="Invalid password")
+            
+            salt_b64 = user['salt']
+            import base64
+            salt = base64.b64decode(salt_b64)
+            client_hash = hashlib.pbkdf2_hmac('sha256', req.password.encode(), salt, 100000).hex()
+            
+            if not verify_password(client_hash, user['hashed_pw']):
+                raise HTTPException(status_code=401, detail="Invalid password")
+            role = user.get('role')
+        else:
+            raise HTTPException(status_code=401, detail="Password required")
+    
+    token = create_access_token(sub=username, role=role)
     # Set HttpOnly, Secure cookie for the token (frontend will use cookie-based auth).
     resp = JSONResponse(content={"access_token": token, "token_type": "bearer"})
     # Max-Age in seconds
@@ -201,7 +408,7 @@ def login(req: LoginRequest):
     )
     # Also create a long-lived refresh token (HttpOnly cookie) so clients can
     # obtain new access tokens without re-prompting credentials.
-    refresh_token, refresh_exp = create_refresh_token(req.username)
+    refresh_token, refresh_exp = create_refresh_token(username)
     refresh_max = int((refresh_exp - refresh_exp.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds() or (7*24*3600))
     # Simpler: set refresh cookie max-age to 7 days by default
     resp.set_cookie(
@@ -217,12 +424,15 @@ def login(req: LoginRequest):
 
 
 @app.get('/auth/salt')
-def get_salt(username: str):
+def get_salt(username: Optional[str] = None):
+    """Get salt for password hashing (defaults to admin user)"""
     # Public endpoint to return stored per-user salt (base64) for client-side PBKDF2
     from backend.users import get_user
+    username = username or 'admin'  # Default to admin if not specified
     user = get_user(username)
     if not user:
-        raise HTTPException(status_code=404, detail='User not found')
+        # Return generic error to avoid username enumeration
+        raise HTTPException(status_code=404, detail='Unable to retrieve authentication parameters')
     salt = user.get('salt')
     if not salt:
         raise HTTPException(status_code=404, detail='Salt not available')
@@ -326,3 +536,250 @@ def ack_alert(alert_id: str, user: UserInfo = Depends(get_current_user)):
     if not acknowledge_alert(alert_id):
         raise HTTPException(status_code=404, detail="Alert not found")
     return {"ok": True, "acknowledged": alert_id, "by": user.username}
+
+
+# Device Discovery and Management Endpoints
+@app.get("/devices/discover")
+async def discover_devices_endpoint(
+    start_port: int = 8080, 
+    count: int = 20,
+    user: UserInfo = Depends(get_current_user)
+):
+    """Scan for devices on local network starting from start_port"""
+    from backend.device_discovery import discover_devices
+    devices = await discover_devices(start_port=start_port, count=count, timeout=0.5)
+    return {"devices": devices, "scanned_ports": count}
+
+
+@app.post("/devices/pair")
+async def pair_device_endpoint(
+    request: dict,
+    user: UserInfo = Depends(require_admin)
+):
+    """Pair with a discovered device"""
+    from backend.device_discovery import pair_device, configure_device
+    from backend.store import save_device, get_device
+    from backend.config import get_settings
+    
+    device_id = request.get('device_id')
+    port = request.get('port')
+    pairing_code = request.get('pairing_code')
+    user_name = request.get('name')  # User-defined name
+    user_location = request.get('location')  # User-defined location
+    
+    if not device_id or not port:
+        raise HTTPException(status_code=400, detail="device_id and port are required")
+    
+    # Attempt to pair
+    result = await pair_device(port, pairing_code)
+    if not result or not result.get('success'):
+        raise HTTPException(status_code=400, detail=result.get('message', 'Pairing failed') if result else 'Pairing failed - no response from device')
+    
+    # Get device info to save
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            info_response = await client.get(f"http://127.0.0.1:{port}/info")
+            device_info = info_response.json()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to get device info")
+    
+    # Use user-provided name and location if given, otherwise use device defaults
+    device_name = user_name if user_name else device_info.get('name', f"{device_info['type']} Sensor")
+    device_location = user_location if user_location else device_info.get('location', 'Unknown')
+    
+    # Save device to database
+    save_device(
+        device_id=result['device_id'],
+        name=device_name,
+        device_type=device_info['type'],
+        location=device_location,
+        port=port,
+        paired=True,
+        shared_secret=result.get('shared_secret'),
+        model=device_info.get('model', 'HP-SHSS-SIM'),
+        firmware_version=device_info.get('firmware_version', '1.0.0')
+    )
+    
+    # Configure device with backend URL
+    settings = get_settings()
+    backend_url = f"https://localhost:8000"  # Adjust based on your setup
+    await configure_device(port, backend_url)
+    
+    return {
+        "success": True,
+        "device_id": result['device_id'],
+        "message": "Device paired and configured successfully"
+    }
+
+
+@app.get("/devices/registered")
+async def get_registered_devices(user: UserInfo = Depends(get_current_user)):
+    """Get all registered/paired devices"""
+    from backend.store import get_all_devices
+    from datetime import datetime, timedelta
+    devices = get_all_devices()
+    
+    # Consider a device online if it has sent data in the last 5 minutes
+    online_threshold = datetime.now() - timedelta(minutes=5)
+    
+    # Enhance with current status if available
+    for device in devices:
+        # Check if we have recent sensor reading
+        if device['device_id'] in SENSOR_LAST:
+            reading = SENSOR_LAST[device['device_id']]
+            device['current_value'] = reading.value
+            device['last_reading'] = reading.ts.isoformat()
+            # Check if reading is recent enough to consider device online
+            device['online'] = reading.ts >= online_threshold
+        else:
+            device['online'] = False
+    
+    return devices
+
+
+@app.put("/devices/{device_id}")
+async def update_device(
+    device_id: str,
+    request: dict,
+    user: UserInfo = Depends(require_admin)
+):
+    """Update device name and location"""
+    from backend.store import get_device, save_device
+    
+    device = get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Get updated values or keep existing
+    name = request.get('name', device['name'])
+    location = request.get('location', device['location'])
+    
+    # Update device in database
+    save_device(
+        device_id=device_id,
+        name=name,
+        device_type=device['type'],
+        location=location,
+        port=device['port'],
+        paired=device['paired'],
+        shared_secret=device.get('shared_secret'),
+        model=device.get('model', 'HP-SHSS-SIM'),
+        firmware_version=device.get('firmware_version', '1.0.0')
+    )
+    
+    return {"success": True, "message": "Device updated"}
+
+
+@app.post("/devices/{device_id}/unpair")
+async def unpair_device(device_id: str, user: UserInfo = Depends(require_admin)):
+    """Unpair a device (mark as unpaired but keep in database)"""
+    from backend.store import get_device, save_device
+    
+    device = get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Update device to unpaired status
+    save_device(
+        device_id=device_id,
+        name=device['name'],
+        device_type=device['type'],
+        location=device['location'],
+        port=device['port'],
+        paired=False,
+        shared_secret=None,  # Clear the shared secret
+        model=device.get('model', 'HP-SHSS-SIM'),
+        firmware_version=device.get('firmware_version', '1.0.0')
+    )
+    
+    return {"success": True, "message": "Device unpaired"}
+
+
+@app.post("/devices/{device_id}/repair")
+async def repair_device_endpoint(
+    device_id: str,
+    request: dict,
+    user: UserInfo = Depends(require_admin)
+):
+    """Re-pair an unpaired device"""
+    from backend.device_discovery import pair_device, configure_device
+    from backend.store import save_device, get_device
+    from backend.config import get_settings
+    
+    device = get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    port = request.get('port', device['port'])
+    pairing_code = request.get('pairing_code')
+    
+    if not pairing_code:
+        raise HTTPException(status_code=400, detail="pairing_code is required")
+    
+    # Attempt to pair
+    result = await pair_device(port, pairing_code)
+    if not result or not result.get('success'):
+        raise HTTPException(status_code=400, detail=result.get('message', 'Pairing failed') if result else 'Pairing failed - no response from device')
+    
+    # Get device info to update
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            info_response = await client.get(f"http://127.0.0.1:{port}/info")
+            device_info = info_response.json()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to get device info")
+    
+    # Update device to paired status
+    save_device(
+        device_id=device_id,
+        name=device['name'],  # Keep existing name
+        device_type=device_info['type'],
+        location=device['location'],  # Keep existing location
+        port=port,
+        paired=True,
+        shared_secret=result.get('shared_secret'),
+        model=device_info.get('model', 'HP-SHSS-SIM'),
+        firmware_version=device_info.get('firmware_version', '1.0.0')
+    )
+    
+    # Configure device with backend URL
+    settings = get_settings()
+    backend_url = f"https://localhost:8000"
+    await configure_device(port, backend_url)
+    
+    return {
+        "success": True,
+        "device_id": device_id,
+        "message": "Device repaired successfully"
+    }
+
+
+@app.delete("/devices/{device_id}")
+async def remove_device(device_id: str, user: UserInfo = Depends(require_admin)):
+    """Remove a device from the system"""
+    from backend.store import delete_device
+    success = delete_device(device_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"success": True, "message": "Device removed"}
+
+
+@app.get("/devices/{device_id}/status")
+async def get_device_status_endpoint(device_id: str, user: UserInfo = Depends(get_current_user)):
+    """Get current status from a specific device"""
+    from backend.store import get_device, update_device_last_seen
+    from backend.device_discovery import get_device_status
+    
+    device = get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Query device for current status
+    status = await get_device_status(device['port'])
+    if status:
+        update_device_last_seen(device_id)
+        return status
+    else:
+        raise HTTPException(status_code=503, detail="Device not responding")

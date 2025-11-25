@@ -74,6 +74,31 @@ def _init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS devices (
+            device_id TEXT PRIMARY KEY,
+            name TEXT,
+            type TEXT,
+            location TEXT,
+            port INTEGER,
+            paired INTEGER DEFAULT 0,
+            shared_secret TEXT,
+            model TEXT,
+            firmware_version TEXT,
+            added_at TEXT,
+            last_seen TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS system_config (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """
+    )
     _DB.commit()
 
     # If running under pytest, ensure a clean DB state for deterministic tests.
@@ -89,33 +114,8 @@ def _init_db():
     except Exception:
         pass
 
-    # Seed demo users (admin and alice) if users table is empty.
-    try:
-        cur.execute("SELECT COUNT(1) as c FROM users")
-        r = cur.fetchone()
-        if r and r['c'] == 0:
-            # Seed demo users with per-user salt and bcrypt of client-hash
-            try:
-                import hashlib, base64, os
-                from .security import hash_password
-
-                def _seed_user(username, plain_pw, role):
-                    salt = os.urandom(16)
-                    salt_b64 = base64.b64encode(salt).decode()
-                    # Derive client-side hash using same PBKDF2 params as the frontend
-                    client_hash = hashlib.pbkdf2_hmac('sha256', plain_pw.encode(), salt, 100000).hex()
-                    hashed = hash_password(client_hash)
-                    cur.execute("REPLACE INTO users(username, hashed_pw, role, salt) VALUES (?, ?, ?, ?)",
-                                (username, hashed, role, salt_b64))
-
-                _seed_user('admin', 'admin123', 'Admin')
-                _seed_user('alice', 'alice123', 'Occupant')
-                _DB.commit()
-            except Exception:
-                # If something goes wrong, skip seeding (dev only fallback)
-                pass
-    except Exception:
-        pass
+    # Don't seed demo users anymore - they will be created during setup wizard
+    # This comment preserves the structure but removes auto-seeding
 
 
 _init_db()
@@ -296,3 +296,126 @@ def revoke_refresh_token(token: str) -> None:
     cur = _DB.cursor()
     cur.execute("DELETE FROM refresh_tokens WHERE token = ?", (token,))
     _DB.commit()
+
+
+### Device management helpers
+def save_device(device_id: str, name: str, device_type: str, location: str, port: int, 
+                paired: bool = False, shared_secret: str = None, 
+                model: str = "HP-SHSS-SIM", firmware_version: str = "1.0.0") -> None:
+    """Save or update a device in the database"""
+    cur = _DB.cursor()
+    now = datetime.utcnow().isoformat()
+    cur.execute(
+        """INSERT OR REPLACE INTO devices 
+           (device_id, name, type, location, port, paired, shared_secret, model, firmware_version, added_at, last_seen)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT added_at FROM devices WHERE device_id = ?), ?), ?)""",
+        (device_id, name, device_type, location, port, int(paired), shared_secret, 
+         model, firmware_version, device_id, now, now)
+    )
+    _DB.commit()
+
+def get_device(device_id: str) -> Optional[dict]:
+    """Get a device by ID"""
+    cur = _DB.cursor()
+    cur.execute(
+        "SELECT device_id, name, type, location, port, paired, shared_secret, model, firmware_version, added_at, last_seen FROM devices WHERE device_id = ?",
+        (device_id,)
+    )
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {
+        "device_id": r['device_id'],
+        "name": r['name'],
+        "type": r['type'],
+        "location": r['location'],
+        "port": r['port'],
+        "paired": bool(r['paired']),
+        "shared_secret": r['shared_secret'],
+        "model": r['model'],
+        "firmware_version": r['firmware_version'],
+        "added_at": r['added_at'],
+        "last_seen": r['last_seen']
+    }
+
+def get_all_devices() -> List[dict]:
+    """Get all registered devices"""
+    cur = _DB.cursor()
+    cur.execute(
+        "SELECT device_id, name, type, location, port, paired, shared_secret, model, firmware_version, added_at, last_seen FROM devices ORDER BY added_at DESC"
+    )
+    rows = cur.fetchall()
+    devices = []
+    for r in rows:
+        devices.append({
+            "device_id": r['device_id'],
+            "name": r['name'],
+            "type": r['type'],
+            "location": r['location'],
+            "port": r['port'],
+            "paired": bool(r['paired']),
+            "shared_secret": r['shared_secret'],
+            "model": r['model'],
+            "firmware_version": r['firmware_version'],
+            "added_at": r['added_at'],
+            "last_seen": r['last_seen']
+        })
+    return devices
+
+def update_device_last_seen(device_id: str) -> None:
+    """Update the last seen timestamp for a device"""
+    cur = _DB.cursor()
+    now = datetime.utcnow().isoformat()
+    cur.execute("UPDATE devices SET last_seen = ? WHERE device_id = ?", (now, device_id))
+    _DB.commit()
+
+def delete_device(device_id: str) -> bool:
+    """Delete a device from the database"""
+    cur = _DB.cursor()
+    cur.execute("DELETE FROM devices WHERE device_id = ?", (device_id,))
+    _DB.commit()
+    return cur.rowcount > 0
+
+
+### First-time setup helpers
+def is_setup_complete() -> bool:
+    """Check if initial setup has been completed"""
+    cur = _DB.cursor()
+    cur.execute("SELECT value FROM system_config WHERE key = ?", ('setup_complete',))
+    r = cur.fetchone()
+    return r and r['value'] == 'true'
+
+def mark_setup_complete() -> None:
+    """Mark initial setup as complete"""
+    cur = _DB.cursor()
+    cur.execute("REPLACE INTO system_config(key, value) VALUES (?, ?)", ('setup_complete', 'true'))
+    _DB.commit()
+
+def get_system_config(key: str) -> Optional[str]:
+    """Get a system configuration value"""
+    cur = _DB.cursor()
+    cur.execute("SELECT value FROM system_config WHERE key = ?", (key,))
+    r = cur.fetchone()
+    return r['value'] if r else None
+
+def set_system_config(key: str, value: str) -> None:
+    """Set a system configuration value"""
+    cur = _DB.cursor()
+    cur.execute("REPLACE INTO system_config(key, value) VALUES (?, ?)", (key, value))
+    _DB.commit()
+
+def get_home_name() -> str:
+    """Get the configured home name"""
+    return get_system_config('home_name') or 'My Home'
+
+def set_home_name(name: str) -> None:
+    """Set the home name"""
+    set_system_config('home_name', name)
+
+def get_recovery_key() -> Optional[str]:
+    """Get the admin recovery key"""
+    return get_system_config('recovery_key')
+
+def set_recovery_key(key: str) -> None:
+    """Set the admin recovery key"""
+    set_system_config('recovery_key', key)
