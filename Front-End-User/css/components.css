@@ -133,6 +133,7 @@
 
 .device-status.online {
     background-color: var(--accent-success);
+    color: white;
 }
 
 .device-status.offline {

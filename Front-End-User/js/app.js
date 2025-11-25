@@ -7,6 +7,7 @@ const app = {
     isAuthenticated: false,
     setupComplete: false,
     recoveryKey: null,
+    _ackListenerAttached: false,
 
     async init() {
         // Initialize event listeners first (needed for setup wizard)
@@ -23,7 +24,6 @@ const app = {
             
             if (!this.setupComplete) {
                 // Show setup wizard
-                console.log('Setup not complete, showing wizard');
                 const sidebar = document.querySelector('.sidebar');
                 if (sidebar) sidebar.style.display = 'none';
                 ui.showPage('setup');
@@ -31,9 +31,7 @@ const app = {
                 return;
             }
         } catch (err) {
-            console.error('Failed to check setup status:', err);
             // If we can't check status, assume setup needed
-            console.log('Setup check failed, showing wizard');
             const sidebar = document.querySelector('.sidebar');
             if (sidebar) sidebar.style.display = 'none';
             ui.showPage('setup');
@@ -155,9 +153,7 @@ const app = {
 
         // Device Setup Wizard
         const scanBtn = document.getElementById('scan-devices-btn');
-        const refreshBtn = document.getElementById('refresh-registered-btn');
         if (scanBtn) scanBtn.addEventListener('click', () => this.scanForDevices());
-        if (refreshBtn) refreshBtn.addEventListener('click', () => this.loadRegisteredDevices());
         
         // Device Setup Modal
         const openDeviceSetupBtn = document.getElementById('open-device-setup-btn');
@@ -167,13 +163,14 @@ const app = {
         if (openDeviceSetupBtn) {
             openDeviceSetupBtn.addEventListener('click', () => {
                 deviceSetupModal.classList.add('active');
-                this.loadRegisteredDevices(); // Load current devices when opening
+                document.body.style.overflow = 'hidden';
             });
         }
         
         if (closeDeviceSetupBtn) {
             closeDeviceSetupBtn.addEventListener('click', () => {
                 deviceSetupModal.classList.remove('active');
+                document.body.style.overflow = '';
             });
         }
         
@@ -182,6 +179,7 @@ const app = {
             deviceSetupModal.addEventListener('click', (e) => {
                 if (e.target === deviceSetupModal) {
                     deviceSetupModal.classList.remove('active');
+                    document.body.style.overflow = '';
                 }
             });
         }
@@ -263,9 +261,19 @@ const app = {
                 refreshDevicesBtn.textContent = 'Refreshing...';
                 try {
                     await this.loadDevices();
+                    // Brief success indicator
+                    refreshDevicesBtn.textContent = 'Refreshed!';
+                    setTimeout(() => {
+                        refreshDevicesBtn.textContent = 'Refresh';
+                    }, 1000);
+                } catch (err) {
+                    console.error('Refresh error:', err);
+                    refreshDevicesBtn.textContent = 'Error';
+                    setTimeout(() => {
+                        refreshDevicesBtn.textContent = 'Refresh';
+                    }, 2000);
                 } finally {
                     refreshDevicesBtn.disabled = false;
-                    refreshDevicesBtn.textContent = 'Refresh';
                 }
             });
         }
@@ -288,20 +296,14 @@ const app = {
         try {
             const password = document.getElementById('password').value;
             
-            console.log('Attempting login...');
             await api.login(password);
-            console.log('Login successful, updating UI...');
             
             // Mark authenticated and update UI
             this.isAuthenticated = true;
-            console.log('Set isAuthenticated to:', this.isAuthenticated);
-            console.log('window.app.isAuthenticated:', window.app.isAuthenticated);
             
             this.setAuthUI(true);
             
-            console.log('Starting dashboard...');
             await this.startDashboard();
-            console.log('Dashboard started');
         } catch (err) {
             console.error('Login failed:', err);
             errorDiv.textContent = err.message || 'Login failed';
@@ -349,47 +351,45 @@ const app = {
     },
 
     async startDashboard() {
-        console.log('startDashboard: calling ui.showPage(dashboard)');
         ui.showPage('dashboard');
-        console.log('startDashboard: calling updateDashboard');
+        // Ping devices to get current values before first update
+        await api.refreshDevices().catch(() => {}); // Don't fail if refresh fails
         await this.updateDashboard();
-        console.log('startDashboard: updateDashboard complete');
         
         // Start real-time updates every 3 seconds for more responsive alerts
         this.updateInterval = setInterval(() => {
             this.updateDashboard();
         }, 3000);
-        console.log('startDashboard: interval started');
     },
 
     async updateDashboard() {
-        console.log('updateDashboard: starting');
         try {
-            console.log('updateDashboard: fetching status, alerts, and devices');
             const [status, alerts, devices] = await Promise.all([
                 api.getStatus(),
                 api.getAlerts(),
-                api.getDevices()
+                api.getRegisteredDevices()
             ]);
-            console.log('updateDashboard: received data', { status, alerts, devices });
 
             // Update status cards
             document.getElementById('sensors-online').textContent = status.sensors_online;
             
-            // Update total devices count
+            // Update total devices count (only paired devices)
+            const pairedDevices = devices.filter(d => d.paired);
             const totalDevicesEl = document.getElementById('total-devices');
-            if (totalDevicesEl) totalDevicesEl.textContent = devices.length;
+            if (totalDevicesEl) totalDevicesEl.textContent = pairedDevices.length;
 
-            // Update alerts list and stream
+            // Update alerts list
             this.alerts = alerts;
             this.renderAlerts();
+            
+            // Update device status display
+            this.renderDashboardDevices(devices);
 
             // Update last update time
-            document.getElementById('last-update-time').textContent = new Date().toLocaleTimeString();
-            console.log('updateDashboard: complete');
+            const lastUpdateEl = document.getElementById('last-update-time');
+            if (lastUpdateEl) lastUpdateEl.textContent = new Date().toLocaleTimeString();
         } catch (err) {
             console.error('Dashboard update failed:', err);
-            console.error('Error details:', err.message, err.stack);
         }
     },
 
@@ -403,51 +403,65 @@ const app = {
         
         const newAlertIds = new Set(this.alerts.map(a => a.id));
         
-        // Only re-render if the alerts have actually changed
-        const alertsChanged = this.alerts.length !== currentAlertIds.size ||
-            !this.alerts.every(a => currentAlertIds.has(a.id));
+        // Remove alerts that no longer exist
+        Array.from(alertsList.querySelectorAll('.alert-item')).forEach(el => {
+            if (!newAlertIds.has(el.dataset.alertId)) {
+                el.remove();
+            }
+        });
         
-        if (alertsChanged) {
-            alertsList.innerHTML = this.alerts.length ? 
-                this.alerts.map(alert => ui.renderAlert(alert)).join('') :
-                '<div class="empty-state">No active alerts</div>';
-        }
-
-        // Real-time stream - only update if changed
-        const alertsStream = document.getElementById('alerts-stream');
-        const streamAlertIds = new Set(
-            Array.from(alertsStream.querySelectorAll('.alert-item'))
-                .map(el => el.dataset.alertId)
-        );
+        // Add new alerts
+        this.alerts.forEach(alert => {
+            if (!currentAlertIds.has(alert.id)) {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = ui.renderAlert(alert);
+                alertsList.appendChild(tempDiv.firstElementChild);
+            }
+        });
         
-        const streamAlerts = this.alerts
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-            .slice(0, 10);
-        
-        const streamChanged = streamAlerts.length !== streamAlertIds.size ||
-            !streamAlerts.every(a => streamAlertIds.has(a.id));
-        
-        if (streamChanged) {
-            alertsStream.innerHTML = streamAlerts
-                .map(alert => ui.renderAlert(alert))
-                .join('');
+        // Handle empty state
+        if (this.alerts.length === 0 && alertsList.children.length === 0) {
+            alertsList.innerHTML = '<div class="empty-state">No active alerts</div>';
+        } else if (this.alerts.length > 0) {
+            // Remove empty state if it exists
+            const emptyState = alertsList.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
         }
 
         // Update counter
-        document.getElementById('active-alert-count').textContent = this.alerts.length;
+        const counterEl = document.getElementById('active-alert-count');
+        if (counterEl) counterEl.textContent = this.alerts.length;
 
         // Attach event listeners to acknowledge buttons using event delegation
         this.attachAckButtonListeners();
     },
 
+    renderDashboardDevices(devices) {
+        const dashboardDevices = document.getElementById('dashboard-devices');
+        if (!dashboardDevices) return;
+        
+        const pairedDevices = devices.filter(d => d.paired);
+        
+        if (pairedDevices.length === 0) {
+            dashboardDevices.innerHTML = '<div class="empty-state">No devices paired</div>';
+            return;
+        }
+        
+        dashboardDevices.innerHTML = pairedDevices.map(device => ui.renderDashboardDevice(device)).join('');
+    },
+
     attachAckButtonListeners() {
         // Use event delegation to handle dynamically created buttons
-        document.addEventListener('click', (e) => {
-            if (e.target.matches('.alert-ack-btn')) {
-                const alertId = e.target.dataset.alertId;
-                if (alertId) this.acknowledgeAlert(alertId);
-            }
-        }, { once: false });
+        // Only attach once during initialization
+        if (!this._ackListenerAttached) {
+            document.addEventListener('click', (e) => {
+                if (e.target.matches('.alert-ack-btn')) {
+                    const alertId = e.target.dataset.alertId;
+                    if (alertId) this.acknowledgeAlert(alertId);
+                }
+            });
+            this._ackListenerAttached = true;
+        }
     },
 
     async acknowledgeAlert(alertId) {
@@ -460,11 +474,25 @@ const app = {
     },
 
     async loadDevices() {
+        const devicesGrid = document.getElementById('devices-grid');
+        
+        // Only render if we're on the devices page
+        if (!devicesGrid) return;
+        
         try {
+            // Try to ping devices for current values, but don't fail if it doesn't work
+            try {
+                await api.refreshDevices();
+            } catch (refreshErr) {
+                console.warn('Could not refresh devices:', refreshErr);
+            }
+            
             const devices = await api.getRegisteredDevices();
+            console.log('Loaded devices from backend:', devices);
+            
             // Filter to only show paired devices on the main devices page
             const pairedDevices = devices.filter(device => device.paired);
-            const devicesGrid = document.getElementById('devices-grid');
+            console.log('Paired devices:', pairedDevices);
             
             if (pairedDevices.length === 0) {
                 devicesGrid.innerHTML = '<div class="empty-state">No devices registered yet. Click "Add Device" to get started.</div>';
@@ -474,7 +502,6 @@ const app = {
             devicesGrid.innerHTML = pairedDevices.map(device => ui.renderDevice(device)).join('');
         } catch (err) {
             console.error('Failed to load devices:', err);
-            const devicesGrid = document.getElementById('devices-grid');
             if (devicesGrid) {
                 devicesGrid.innerHTML = '<div class="empty-state">Failed to load devices</div>';
             }
@@ -653,9 +680,28 @@ const app = {
         }
     },
 
-    displayDiscoveredDevices(devices) {
+    async displayDiscoveredDevices(devices) {
         const container = document.getElementById('discovered-devices');
-        container.innerHTML = devices.map(device => `
+        
+        // Check backend database for which devices are actually paired
+        let registeredDevices = [];
+        try {
+            registeredDevices = await api.getRegisteredDevices();
+        } catch (err) {
+            console.warn('Could not fetch registered devices:', err);
+        }
+        
+        // Create a map of device_id -> paired status from backend (source of truth)
+        const pairedMap = {};
+        registeredDevices.forEach(d => {
+            pairedMap[d.device_id] = d.paired;
+        });
+        
+        container.innerHTML = devices.map(device => {
+            // Use backend database as source of truth for pairing status
+            const isPaired = pairedMap[device.device_id] === true;
+            
+            return `
             <div class="device-card discovered">
                 <div class="device-header">
                     <h4>${device.type.toUpperCase()}</h4>
@@ -666,9 +712,9 @@ const app = {
                     <p><strong>Type:</strong> ${device.type}</p>
                     <p><strong>Model:</strong> ${device.model}</p>
                     <p><strong>Firmware:</strong> ${device.firmware_version}</p>
-                    <p><strong>Status:</strong> ${device.requires_pairing ? 'Not Paired' : 'Paired'}</p>
+                    <p><strong>Status:</strong> ${isPaired ? 'Paired' : 'Not Paired'}</p>
                 </div>
-                ${device.requires_pairing ? `
+                ${!isPaired ? `
                     <div class="device-actions">
                         <input type="text" 
                                class="device-name-input" 
@@ -693,7 +739,7 @@ const app = {
                     </div>
                 ` : '<p class="success">Already paired</p>'}
             </div>
-        `).join('');
+        `}).join('');
 
         // Add event listeners for pair buttons
         container.querySelectorAll('.pair-btn').forEach(btn => {
@@ -723,9 +769,15 @@ const app = {
             const result = await api.pairDevice(deviceId, port, pairingCode, name, location);
             if (result.success) {
                 alert(`Device ${name} paired successfully!`);
-                // Refresh both lists
-                await this.scanForDevices();
-                await this.loadRegisteredDevices();
+                // Close the modal
+                const modal = document.getElementById('device-setup-modal');
+                if (modal) {
+                    modal.style.display = 'none';
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                }
+                // Reload devices page if we're on it
+                await this.loadDevices();
             } else {
                 alert(`Pairing failed: ${result.message}`);
             }
@@ -735,88 +787,10 @@ const app = {
         }
     },
 
-    async loadRegisteredDevices() {
-        try {
-            const devices = await api.getRegisteredDevices();
-            const container = document.getElementById('registered-devices');
-            
-            if (devices.length === 0) {
-                container.innerHTML = '<p class="empty-state">No devices registered yet.</p>';
-                return;
-            }
-
-            container.innerHTML = devices.map(device => `
-                <div class="device-card registered">
-                    <div class="device-header">
-                        <h4>${device.name}</h4>
-                        <span class="device-badge ${device.online ? 'online' : device.paired ? 'offline' : 'unpaired'}">
-                            ${device.online ? 'Online' : device.paired ? 'Offline' : 'Unpaired'}
-                        </span>
-                    </div>
-                    <div class="device-details">
-                        <p><strong>Type:</strong> ${device.type}</p>
-                        <p><strong>Location:</strong> ${device.location}</p>
-                        <p><strong>Port:</strong> ${device.port}</p>
-                        <p><strong>Device ID:</strong> ${device.device_id}</p>
-                        ${device.current_value ? `<p><strong>Current Value:</strong> ${device.current_value}</p>` : ''}
-                        ${device.last_reading ? `<p><strong>Last Reading:</strong> ${new Date(device.last_reading).toLocaleString()}</p>` : ''}
-                        <p><strong>Added:</strong> ${new Date(device.added_at).toLocaleString()}</p>
-                    </div>
-                    <div class="device-actions">
-                        ${device.paired ? `
-                            <button class="btn-warning unpair-btn" data-device-id="${device.device_id}">
-                                Unpair Device
-                            </button>
-                        ` : `
-                            <button class="btn-primary repair-btn" data-device-id="${device.device_id}" data-port="${device.port}">
-                                Repair Device
-                            </button>
-                        `}
-                        <button class="btn-danger remove-btn" data-device-id="${device.device_id}">
-                            Remove Device
-                        </button>
-                    </div>
-                </div>
-            `).join('');
-
-            // Add event listeners for unpair buttons
-            container.querySelectorAll('.unpair-btn').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    const deviceId = btn.dataset.deviceId;
-                    if (confirm(`Are you sure you want to unpair device ${deviceId}? You can repair it later.`)) {
-                        await this.unpairDevice(deviceId);
-                    }
-                });
-            });
-
-            // Add event listeners for repair buttons
-            container.querySelectorAll('.repair-btn').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    const deviceId = btn.dataset.deviceId;
-                    const port = btn.dataset.port;
-                    await this.repairDevice(deviceId, port);
-                });
-            });
-
-            // Add event listeners for remove buttons
-            container.querySelectorAll('.remove-btn').forEach(btn => {
-                btn.addEventListener('click', async () => {
-                    const deviceId = btn.dataset.deviceId;
-                    if (confirm(`Are you sure you want to permanently remove device ${deviceId}?`)) {
-                        await this.removeDevice(deviceId);
-                    }
-                });
-            });
-        } catch (err) {
-            console.error('Failed to load registered devices:', err);
-        }
-    },
-
     async unpairDevice(deviceId) {
         try {
             await api.unpairDevice(deviceId);
             alert('Device unpaired successfully');
-            await this.loadRegisteredDevices();
         } catch (err) {
             alert(`Failed to unpair device: ${err.message}`);
             console.error('Unpair device error:', err);
@@ -830,7 +804,6 @@ const app = {
         try {
             await api.repairDevice(deviceId, port, pairingCode);
             alert('Device repaired successfully');
-            await this.loadRegisteredDevices();
         } catch (err) {
             alert(`Failed to repair device: ${err.message}`);
             console.error('Repair device error:', err);
@@ -841,7 +814,6 @@ const app = {
         try {
             await api.removeDevice(deviceId);
             alert('Device removed successfully');
-            await this.loadRegisteredDevices();
         } catch (err) {
             alert(`Failed to remove device: ${err.message}`);
             console.error('Remove device error:', err);
@@ -887,9 +859,25 @@ const app = {
             return;
         }
         
+        // Validate name and location length
+        if (newName.length < 2 || newName.length > 50) {
+            alert('Device name must be between 2 and 50 characters');
+            return;
+        }
+        
+        if (newLocation.length < 2 || newLocation.length > 50) {
+            alert('Location must be between 2 and 50 characters');
+            return;
+        }
+        
+        // Basic sanitization - remove potentially dangerous characters
+        const sanitize = (str) => str.replace(/[<>"']/g, '');
+        const sanitizedName = sanitize(newName);
+        const sanitizedLocation = sanitize(newLocation);
+        
         try {
             // Call API to update device
-            await api.updateDevice(deviceId, { name: newName, location: newLocation });
+            await api.updateDevice(deviceId, { name: sanitizedName, location: sanitizedLocation });
             
             alert('Device updated successfully');
             
@@ -910,15 +898,12 @@ const app = {
         const deviceId = device.device_id || device.id;
         const deviceName = device.name;
         
-        console.log('Unpairing device:', { deviceId, deviceName, device });
-        
         if (!confirm(`Are you sure you want to unpair "${deviceName}"? You can repair it later.`)) {
             return;
         }
         
         try {
             const result = await api.unpairDevice(deviceId);
-            console.log('Unpair result:', result);
             alert('Device unpaired successfully');
             
             // Close modal
@@ -939,8 +924,6 @@ const app = {
         const deviceName = device.name;
         const port = device.port;
         
-        console.log('Repairing device:', { deviceId, deviceName, port, device });
-        
         const pairingCode = prompt(`Enter the pairing code for "${deviceName}" (port ${port}):`);
         if (!pairingCode) {
             return; // User cancelled
@@ -948,7 +931,6 @@ const app = {
         
         try {
             const result = await api.repairDevice(deviceId, port, pairingCode);
-            console.log('Repair result:', result);
             alert('Device repaired successfully');
             
             // Close modal
@@ -968,15 +950,12 @@ const app = {
         const deviceId = device.device_id || device.id;
         const deviceName = device.name;
         
-        console.log('Deleting device:', { deviceId, deviceName, device });
-        
         if (!confirm(`Are you sure you want to permanently delete "${deviceName}"? This cannot be undone.`)) {
             return;
         }
         
         try {
             const result = await api.removeDevice(deviceId);
-            console.log('Delete result:', result);
             alert('Device deleted successfully');
             
             // Close modal
@@ -993,7 +972,6 @@ const app = {
 
     // Setup wizard methods
     setupNextStep(step) {
-        console.log('Setup wizard: moving to step', step);
         // Hide all steps
         document.querySelectorAll('.wizard-step').forEach(s => s.classList.add('hidden'));
         // Show target step
@@ -1006,15 +984,10 @@ const app = {
     },
 
     async completeSetup() {
-        const homeName = document.getElementById('setup-home-name').value;
+        const homeNameInput = document.getElementById('setup-home-name').value.trim();
+        const homeName = homeNameInput || 'My Home';
         const password = document.getElementById('setup-password').value;
         const confirmPassword = document.getElementById('setup-confirm-password').value;
-
-        // Validate
-        if (!homeName) {
-            alert('Please enter a home name');
-            return;
-        }
 
         if (password !== confirmPassword) {
             alert('Passwords do not match');

@@ -187,5 +187,11 @@ const api = {
                 new_password: newPassword
             })
         });
+    },
+
+    async refreshDevices() {
+        return this.request('/devices/refresh', {
+            method: 'POST'
+        });
     }
 };

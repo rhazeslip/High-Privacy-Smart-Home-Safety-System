@@ -2,6 +2,7 @@
 # FastAPI app for HP-SHSS Edge Hub
 
 from typing import List, Optional
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from backend.logic import process_reading
@@ -288,6 +289,11 @@ def test():
 def ingest_sensor(reading: SensorReading):
     # Ingest a sensor reading, save last reading, and run alert logic.
     save_reading(reading)
+    
+    # Update device last_seen timestamp
+    from backend.store import update_device_last_seen
+    update_device_last_seen(reading.sensor_id)
+    
     alerts = process_reading(reading)
     return {
         "ok": True,
@@ -401,7 +407,7 @@ def login(req: LoginRequest):
         key='hp_token',
         value=token,
         httponly=True,
-        secure=not S.debug,
+        secure=True,  # Always use secure cookies with HTTPS
         samesite='lax',
         max_age=max_age,
         path='/'
@@ -415,7 +421,7 @@ def login(req: LoginRequest):
         key='hp_refresh',
         value=refresh_token,
         httponly=True,
-        secure=not S.debug,
+        secure=True,  # Always use secure cookies with HTTPS
         samesite='lax',
         max_age=7*24*3600,
         path='/'
@@ -618,24 +624,48 @@ async def get_registered_devices(user: UserInfo = Depends(get_current_user)):
     """Get all registered/paired devices"""
     from backend.store import get_all_devices
     from datetime import datetime, timedelta
-    devices = get_all_devices()
     
-    # Consider a device online if it has sent data in the last 5 minutes
-    online_threshold = datetime.now() - timedelta(minutes=5)
-    
-    # Enhance with current status if available
-    for device in devices:
-        # Check if we have recent sensor reading
-        if device['device_id'] in SENSOR_LAST:
-            reading = SENSOR_LAST[device['device_id']]
-            device['current_value'] = reading.value
-            device['last_reading'] = reading.ts.isoformat()
-            # Check if reading is recent enough to consider device online
-            device['online'] = reading.ts >= online_threshold
-        else:
-            device['online'] = False
-    
-    return devices
+    try:
+        devices = get_all_devices()
+        
+        print(f"[DEBUG] get_registered_devices returning {len(devices)} devices")
+        
+        # Consider a device online if it has sent data in the last 5 minutes
+        from datetime import timezone
+        online_threshold = datetime.now(timezone.utc) - timedelta(minutes=5)
+        
+        # Get battery levels from memory
+        battery_levels = globals().get('battery_levels', {})
+        
+        # Enhance with current status if available
+        for device in devices:
+            # Add battery level if available
+            if device['device_id'] in battery_levels:
+                device['battery'] = battery_levels[device['device_id']]
+            
+            # Check if we have recent sensor reading
+            if device['device_id'] in SENSOR_LAST:
+                reading = SENSOR_LAST[device['device_id']]
+                device['current_value'] = reading.value
+                device['last_reading'] = reading.ts.isoformat()
+                # Check if reading is recent enough to consider device online
+                # Make both datetimes timezone-aware for comparison
+                if hasattr(reading.ts, 'tzinfo') and reading.ts.tzinfo is not None:
+                    device['online'] = reading.ts >= online_threshold
+                else:
+                    # If reading.ts is naive, make it UTC-aware
+                    from datetime import timezone as tz
+                    reading_ts_aware = reading.ts.replace(tzinfo=tz.utc)
+                    device['online'] = reading_ts_aware >= online_threshold
+            else:
+                device['online'] = False
+        
+        return devices
+    except Exception as e:
+        print(f"[ERROR] get_registered_devices failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.put("/devices/{device_id}")
@@ -675,10 +705,20 @@ async def update_device(
 async def unpair_device(device_id: str, user: UserInfo = Depends(require_admin)):
     """Unpair a device (mark as unpaired but keep in database)"""
     from backend.store import get_device, save_device
+    import httpx
     
     device = get_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Notify the device it's being unpaired
+    if device['port']:
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=2.0) as client:
+                await client.post(f"http://127.0.0.1:{device['port']}/unpair")
+        except Exception as e:
+            # Device might be offline, continue anyway
+            pass
     
     # Update device to unpaired status
     save_device(
@@ -694,6 +734,53 @@ async def unpair_device(device_id: str, user: UserInfo = Depends(require_admin))
     )
     
     return {"success": True, "message": "Device unpaired"}
+
+
+@app.post("/devices/refresh")
+async def refresh_device_status(user: UserInfo = Depends(get_current_user)):
+    """Ping all paired devices to get their current status"""
+    from backend.store import get_all_devices, update_device_last_seen
+    from datetime import datetime, timezone
+    import httpx
+    
+    devices = get_all_devices()
+    updated_count = 0
+    
+    async with httpx.AsyncClient(verify=False, timeout=2.0) as client:
+        for device in devices:
+            if not device['paired'] or not device['port']:
+                continue
+                
+            try:
+                # Get current status from device
+                response = await client.get(f"http://127.0.0.1:{device['port']}/status")
+                if response.status_code == 200:
+                    status = response.json()
+                    
+                    # Store battery level in memory
+                    if 'battery' in status:
+                        if 'battery_levels' not in globals():
+                            globals()['battery_levels'] = {}
+                        globals()['battery_levels'][device['device_id']] = status['battery']
+                    
+                    # Create sensor reading from device status
+                    reading = SensorReading(
+                        sensor_id=device['device_id'],
+                        type=device['type'],
+                        value=status['value'],
+                        location=device['location'],
+                        ts=datetime.fromisoformat(status['timestamp']) if 'timestamp' in status else datetime.now(timezone.utc)
+                    )
+                    
+                    # Save the reading
+                    save_reading(reading)
+                    update_device_last_seen(device['device_id'])
+                    updated_count += 1
+            except Exception as e:
+                # Device offline or unreachable
+                continue
+    
+    return {"success": True, "updated": updated_count, "total": len([d for d in devices if d['paired']])}
 
 
 @app.post("/devices/{device_id}/repair")

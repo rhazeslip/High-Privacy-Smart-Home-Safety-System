@@ -17,9 +17,8 @@ import time
 import random
 import asyncio
 import threading
-import cmd
 from typing import Optional, Dict, Any, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -52,7 +51,7 @@ class DeviceStatus(BaseModel):
 
 class EventData(BaseModel):
     """Event sent from device to backend"""
-    device_id: str
+    sensor_id: str  # Changed from device_id to match backend SensorReading model
     type: DeviceType
     value: float | str
     location: str
@@ -82,6 +81,7 @@ class DeviceState:
         self.pairing_code = self._generate_pairing_code()
         self.backend_url: Optional[str] = None
         self.current_value = self._get_initial_value()
+        self.battery = 100
         self.event_task: Optional[asyncio.Task] = None
         
     def _generate_pairing_code(self) -> str:
@@ -214,7 +214,8 @@ def create_device_app(state: DeviceState) -> FastAPI:
             type=state.type,
             value=state.current_value,
             location=state.location,
-            timestamp=datetime.utcnow().isoformat()
+            battery=state.battery,
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
         
         return status
@@ -232,6 +233,18 @@ def create_device_app(state: DeviceState) -> FastAPI:
         
         return {"success": True, "message": "Configuration updated"}
     
+    @app.post("/unpair")
+    async def unpair():
+        """Handle unpair notification from backend"""
+        if state.paired:
+            state.paired = False
+            state.shared_secret = None
+            state.backend_url = None
+            print(f"\n[!] Device {state.device_id} has been unpaired by backend")
+            print(f"[!] New pairing code: {state.pairing_code}\n")
+        
+        return {"success": True, "message": "Device unpaired"}
+    
     return app
 
 async def send_event_to_backend(state: DeviceState):
@@ -242,21 +255,34 @@ async def send_event_to_backend(state: DeviceState):
     try:
         import httpx
         event = EventData(
-            device_id=state.device_id,
+            sensor_id=state.device_id,  # Use device_id as sensor_id
             type=state.type,
             value=state.current_value,
             location=state.location,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
         
         async with httpx.AsyncClient(verify=False) as client:
             response = await client.post(
                 f"{state.backend_url}/sensor",
-                json=event.dict(),
+                json=event.model_dump(),
                 timeout=5.0
             )
             if response.status_code == 200:
                 print(f"Event sent: {state.type}={state.current_value}")
+                return True
+    except Exception as e:
+        print(f"Failed to send event: {e}")
+    return False
+
+
+def send_event_sync(state: DeviceState):
+    """Synchronous wrapper to send event from non-async context"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(send_event_to_backend(state))
+        loop.close()
     except Exception as e:
         print(f"Failed to send event: {e}")
 
@@ -270,234 +296,99 @@ async def event_generator(state: DeviceState, interval: int = 30):
             await send_event_to_backend(state)
 
 
-class DeviceCLI(cmd.Cmd):
-    """Interactive CLI for device management and event/alert configuration"""
+def run_simple_ui(state: DeviceState):
+    """Run simple prompt-based UI in terminal"""
     
-    intro = "\nDevice CLI Ready - Type 'help' for commands or 'status' to see device info\n"
-    prompt = "(device) > "
-    
-    def __init__(self, state: DeviceState):
-        super().__init__()
-        self.state = state
-        self.alert_rules = []  # Store alert rules: {type: 'offline|online|threshold', value: optional}
-        self.event_handlers = []  # Store event handlers: {type: 'opened|closed'}
-    
-    def do_status(self, arg):
-        """Show current device status
-        Usage: status"""
-        print(f"\n{'='*60}")
-        print(f"Device Status")
-        print(f"{'='*60}")
-        print(f"  Device ID:      {self.state.device_id}")
-        print(f"  Type:           {self.state.type}")
-        print(f"  Location:       {self.state.location}")
-        print(f"  Port:           {self.state.port}")
-        print(f"  Paired:         {'Yes' if self.state.paired else 'No'}")
-        print(f"  Current Value:  {self.state.current_value}")
-        print(f"  Pairing Code:   {self.state.pairing_code}")
-        if self.state.backend_url:
-            print(f"  Backend URL:    {self.state.backend_url}")
-        print(f"{'='*60}\n")
-    
-    def do_value(self, arg):
-        """Get or set the current device value
-        Usage: value [new_value]
-        
-        Examples:
-            value          - Show current value
-            value open     - Set value to 'open'
-            value 25.5     - Set value to 25.5"""
-        if not arg:
-            print(f"Current value: {self.state.current_value}")
-            return
-        
-        # Set new value
-        if self.state.type in ["door", "window", "garage"]:
-            if arg.lower() in ["open", "closed"]:
-                self.state.current_value = arg.lower()
-                print(f"Value set to: {self.state.current_value}")
-            else:
-                print(f"Invalid value. Use 'open' or 'closed' for {self.state.type} devices")
-        else:
-            try:
-                self.state.current_value = float(arg)
-                print(f"Value set to: {self.state.current_value}")
-            except ValueError:
-                print(f"Invalid numeric value: {arg}")
-    
-    def do_send(self, arg):
-        """Send current value as an event to the backend
-        Usage: send"""
-        if not self.state.paired:
-            print("Device not paired. Cannot send events.")
-            return
-        
-        if not self.state.backend_url:
-            print("Backend URL not configured.")
-            return
-        
-        async def _send():
-            await send_event_to_backend(self.state)
-        
-        asyncio.create_task(_send())
-        print(f"→ Sending event: {self.state.type}={self.state.current_value}")
-    
-    def do_alert(self, arg):
-        """Configure alert rules for this device
-        Usage: alert <type> [value]
-        
-        Types:
-            offline            - Alert when device goes offline
-            online             - Alert when device comes online
-            threshold <value>  - Alert when value exceeds threshold
-            list               - List configured alerts
-            clear              - Clear all alerts
-        
-        Examples:
-            alert offline
-            alert threshold 25
-            alert list"""
-        parts = arg.split()
-        
-        if not parts:
-            print("Usage: alert <type> [value]")
-            print("  Types: offline, online, threshold <value>, list, clear")
-            return
-        
-        alert_type = parts[0].lower()
-        
-        if alert_type == 'list':
-            if not self.alert_rules:
-                print("No alerts configured.")
-                return
-            
-            print(f"\nConfigured Alerts:")
-            print(f"{'-'*50}")
-            for i, rule in enumerate(self.alert_rules, 1):
-                threshold = f" (threshold: {rule['value']})" if rule.get('value') else ""
-                print(f"{i}. {rule['type']}{threshold}")
-            print(f"{'-'*50}\n")
-            return
-        
-        if alert_type == 'clear':
-            self.alert_rules.clear()
-            print("✓ All alerts cleared")
-            return
-        
-        if alert_type not in ['offline', 'online', 'threshold']:
-            print(f"✗ Invalid alert type: {alert_type}")
-            print("  Valid types: offline, online, threshold")
-            return
-        
-        if alert_type == 'threshold':
-            if len(parts) < 2:
-                print("Threshold alerts require a value")
-                print("  Usage: alert threshold <value>")
-                return
-            try:
-                threshold_value = float(parts[1])
-                self.alert_rules.append({'type': alert_type, 'value': threshold_value})
-                print(f"Alert added: {alert_type} (threshold: {threshold_value})")
-            except ValueError:
-                print(f"Invalid threshold value: {parts[1]}")
-        else:
-            self.cli_alerts.append({'type': alert_type})
-            print(f"Alert added: {alert_type}")
-    
-    def do_event(self, arg):
-        """Configure event handlers for door/window devices
-        Usage: event <type>
-        
-        Types:
-            opened   - Log when door/window opens
-            closed   - Log when door/window closes
-            list     - List configured events
-            clear    - Clear all events
-        
-        Examples:
-            event opened
-            event list"""
-        parts = arg.split()
-        
-        if not parts:
-            print("Usage: event <type>")
-            print("  Types: opened, closed, list, clear")
-            return
-        
-        event_type = parts[0].lower()
-        
-        if event_type == 'list':
-            if not self.event_handlers:
-                print("No event handlers configured.")
-                return
-            
-            print(f"\nConfigured Event Handlers:")
-            print(f"{'-'*50}")
-            for i, handler in enumerate(self.event_handlers, 1):
-                print(f"{i}. {handler['type']}")
-            print(f"{'-'*50}\n")
-            return
-        
-        if event_type == 'clear':
-            self.event_handlers.clear()
-            print("✓ All event handlers cleared")
-            return
-        
-        if self.state.type not in ['door', 'window', 'garage']:
-            print(f"✗ Events are only for door/window/garage devices")
-            print(f"  This device is type: {self.state.type}")
-            return
-        
-        if event_type not in ['opened', 'closed']:
-            print(f"✗ Invalid event type: {event_type}")
-            print("  Valid types: opened, closed")
-            return
-        
-        self.event_handlers.append({'type': event_type})
-        print(f"✓ Event handler added: {event_type}")
-        print(f"  Will log when {self.state.type} is {event_type}")
-    
-    def do_simulate(self, arg):
-        """Simulate a value change
-        Usage: simulate"""
-        old_value = self.state.current_value
-        self.state.simulate_value_change()
-        print(f"→ Value changed: {old_value} → {self.state.current_value}")
-    
-    def do_clear(self, arg):
-        """Clear the screen
-        Usage: clear"""
+    def clear_screen():
         os.system('cls' if os.name == 'nt' else 'clear')
     
-    def do_exit(self, arg):
-        """Exit the CLI (device keeps running)
-        Usage: exit"""
-        print("Exiting CLI... (device still running)")
-        return True
+    def show_menu():
+        print(f"{'='*40}")
+        print(f"  Device: {state.device_id} ({state.type}) - Port {state.port}")
+        print(f"  Location: {state.location}")
+        print(f"  Pairing Code: {state.pairing_code}")
+        print(f"  Battery: {state.battery}%")
+        print(f"  Paired: {'Yes' if state.paired else 'No'}")
+        print(f"  Current Value: {state.current_value}")
+        print(f"{'='*60}")
+        print("\n  [1] Set Battery Level")
+        print("  [2] Change State")
+        print("  [3] Send Event")
+        print("  [0] Shutdown")
+        print(f"{'='*40}\n")
     
-    def do_quit(self, arg):
-        """Exit the CLI (device keeps running)
-        Usage: quit"""
-        return self.do_exit(arg)
+    clear_screen()
+    print("\nDevice Emulation")
+    print(f"Device {state.device_id} running on port {state.port}\n")
     
-    def emptyline(self):
-        """Handle empty line"""
-        pass
-    
-    def default(self, line):
-        """Handle unknown commands"""
-        print(f"✗ Unknown command: {line}")
-        print("  Type 'help' for available commands")
-
-
-def run_cli(state: DeviceState):
-    """Run the CLI in the main thread"""
-    try:
-        cli = DeviceCLI(state)
-        cli.cmdloop()
-    except KeyboardInterrupt:
-        print("\n\nShutting down...")
-        sys.exit(0)
+    while True:
+        try:
+            show_menu()
+            choice = input("Select option: ").strip()
+            
+            if choice == '1':
+                try:
+                    new_battery = int(input("Enter battery percentage (0-100): ").strip())
+                    if 0 <= new_battery <= 100:
+                        state.battery = new_battery
+                        print(f"✓ Battery set to {state.battery}%")
+                        # Send update to backend if paired
+                        if state.paired and state.backend_url:
+                            send_event_sync(state)
+                    else:
+                        print("✗ Battery must be between 0 and 100")
+                except ValueError:
+                    print("✗ Invalid number")
+                input("\nPress Enter to continue...")
+                
+            elif choice == '2':
+                if state.type in ["door", "window", "garage"]:
+                    print("Options: open, closed")
+                    new_value = input("Enter value: ").strip().lower()
+                    if new_value in ["open", "closed"]:
+                        state.current_value = new_value
+                        print(f"✓ Value set to: {state.current_value}")
+                        # Send update to backend if paired
+                        if state.paired and state.backend_url:
+                            send_event_sync(state)
+                    else:
+                        print("✗ Invalid value. Use 'open' or 'closed'")
+                else:
+                    try:
+                        new_value = float(input(f"Enter {state.type} value: ").strip())
+                        state.current_value = new_value
+                        print(f"✓ Value set to: {state.current_value}")
+                        # Send update to backend if paired
+                        if state.paired and state.backend_url:
+                            send_event_sync(state)
+                    except ValueError:
+                        print("✗ Invalid number")
+                input("\nPress Enter to continue...")
+                
+            elif choice == '3':
+                if not state.paired:
+                    print("✗ Device not paired. Cannot send events.")
+                elif not state.backend_url:
+                    print("✗ Backend URL not configured.")
+                else:
+                    print(f"✓ Sending event: {state.type}={state.current_value}")
+                    asyncio.run(send_event_to_backend(state))
+                input("\nPress Enter to continue...")
+                
+            elif choice == '0':
+                print("\nShutting down device server...")
+                sys.exit(0)
+                
+            else:
+                print("✗ Invalid option")
+                input("\nPress Enter to continue...")
+                
+        except KeyboardInterrupt:
+            print("\n\nShutting down...")
+            sys.exit(0)
+        except EOFError:
+            print("\n\nShutting down...")
+            sys.exit(0)
 
 
 def main():
@@ -568,8 +459,8 @@ def main():
     # Give server a moment to start
     time.sleep(1)
     
-    # Run CLI in main thread (blocks until exit)
-    run_cli(state)
+    # Run simple UI in main thread (blocks until exit)
+    run_simple_ui(state)
 
 if __name__ == '__main__':
     main()

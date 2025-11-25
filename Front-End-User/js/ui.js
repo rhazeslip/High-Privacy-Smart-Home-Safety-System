@@ -44,18 +44,11 @@ const ui = {
     },
 
     showPage(pageId) {
-        console.log('showPage called with:', pageId);
-        console.log('window.app exists:', !!window.app);
-        console.log('isAuthenticated:', window.app?.isAuthenticated);
-        
         // If trying to access a protected page while unauthenticated, force login
         const protectedPages = ['dashboard', 'devices', 'history', 'settings'];
         if (protectedPages.includes(pageId) && window.app && !window.app.isAuthenticated) {
-            console.log('Auth check failed, redirecting to login');
             pageId = 'login';
         }
-
-        console.log('Final pageId:', pageId);
         
         // Clear password field when navigating away from login page
         if (pageId !== 'login') {
@@ -72,14 +65,10 @@ const ui = {
 
         // Show selected page element (ids are like 'dashboard-page')
         const targetPageId = `${pageId}-page`;
-        console.log('Looking for page with id:', targetPageId);
         
         document.querySelectorAll('.page').forEach(page => {
             const isActive = page.id === targetPageId;
             page.classList.toggle('active', isActive);
-            if (isActive) {
-                console.log('Activated page:', page.id);
-            }
         });
     },
 
@@ -119,7 +108,7 @@ const ui = {
     renderDevice(device) {
         // Handle both registered device format and sensor reading format
         const deviceValue = device.current_value !== undefined ? device.current_value : device.value;
-        const lastUpdate = device.last_reading || device.last_update;
+        const lastUpdate = device.last_reading || device.last_seen || device.last_update;
         const deviceName = device.name || `${device.type.capitalize()} - ${device.location}`;
         
         // Format the device value based on type
@@ -156,10 +145,6 @@ const ui = {
                         <div class="detail-value">${device.battery || 100}%</div>
                     </div>
                     <div class="detail-item">
-                        <div class="detail-label">Signal</div>
-                        <div class="detail-value">${device.signal_strength || 100}%</div>
-                    </div>
-                    <div class="detail-item">
                         <div class="detail-label">Last Update</div>
                         <div class="detail-value">${lastUpdate ? new Date(lastUpdate).toLocaleTimeString() : 'Never'}</div>
                     </div>
@@ -168,6 +153,38 @@ const ui = {
                     <button class="device-edit-btn" data-device-id="${device.device_id || device.id}" data-device='${JSON.stringify(device).replace(/'/g, "&apos;")}'>
                         Edit
                     </button>
+                </div>
+            </div>
+        `;
+    },
+
+    renderDashboardDevice(device) {
+        const deviceValue = device.current_value !== undefined ? device.current_value : device.value;
+        const deviceName = device.name || `${device.type.capitalize()} - ${device.location}`;
+        
+        // Format the device value based on type
+        let valueDisplay = deviceValue !== undefined ? deviceValue : 'N/A';
+        if (device.type === 'temp' && deviceValue !== undefined) {
+            valueDisplay = `${deviceValue}°C`;
+        } else if (device.type === 'door' || device.type === 'window' || device.type === 'garage') {
+            valueDisplay = deviceValue === 'open' ? 'Open' : deviceValue === 'closed' ? 'Closed' : 'N/A';
+        } else if (device.type === 'smoke' || device.type === 'fire' || device.type === 'co' || device.type === 'gas') {
+            valueDisplay = deviceValue !== undefined ? `${deviceValue} ppm` : 'N/A';
+        } else if (device.type === 'water') {
+            valueDisplay = deviceValue > 0 ? 'Detected' : deviceValue === 0 ? 'No Water' : 'N/A';
+        }
+        
+        return `
+            <div class="dashboard-device-item">
+                <div class="dashboard-device-header">
+                    <span class="dashboard-device-name">${deviceName}</span>
+                    <span class="device-status ${device.online ? 'online' : 'offline'}">
+                        ${device.online ? 'Online' : 'Offline'}
+                    </span>
+                </div>
+                <div class="dashboard-device-info">
+                    <span class="dashboard-device-type">${device.type.toUpperCase()}</span>
+                    <span class="dashboard-device-value">${valueDisplay}</span>
                 </div>
             </div>
         `;

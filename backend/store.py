@@ -87,7 +87,8 @@ def _init_db():
             model TEXT,
             firmware_version TEXT,
             added_at TEXT,
-            last_seen TEXT
+            last_seen TEXT,
+            battery INTEGER DEFAULT 100
         )
         """
     )

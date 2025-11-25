@@ -67,20 +67,14 @@
 
       <!-- Setup Wizard Page -->
       <section id="setup-page" class="page">
-        <div class="setup-wizard-container">
-          <div class="setup-wizard">
-            <div class="wizard-header">
-              <h1>Welcome to HP-SHSS</h1>
-              <p>High-Privacy Smart Home Safety System</p>
-            </div>
-
-            <!-- Step 1: Home Name -->
+        <div class="setup-wizard">
+          <div class="wizard-header">
+            <h1>Welcome to your Home Security Dashboard</h1>
+          </div>
             <div class="wizard-step" id="setup-step-1">
               <h2>Step 1: Name Your Home</h2>
-              <p>Give your home a name to personalize your security system.</p>
               <div class="input-group">
-                <label for="setup-home-name">Home Name</label>
-                <input type="text" id="setup-home-name" placeholder="My Home" required>
+                <input type="text" id="setup-home-name" placeholder="My Home">
               </div>
               <button class="btn-primary" id="setup-step-1-next">Next</button>
             </div>
@@ -108,7 +102,6 @@
             <div class="wizard-step hidden" id="setup-step-3">
               <h2>Setup Complete!</h2>
               <p class="success-message">Your system has been configured successfully.</p>
-              
               <div class="recovery-key-section">
                 <h3>Important: Save Your Recovery Key</h3>
                 <p>This key can be used to recover access if you forget your password. Store it in a secure location.</p>
@@ -121,9 +114,7 @@
                   I have saved my recovery key in a secure location
                 </label>
               </div>
-
-              <button class="btn-primary" id="finish-setup-btn" disabled>Continue to Dashboard</button>
-            </div>
+            <button class="btn-primary" id="finish-setup-btn" disabled>Continue to Dashboard</button>
           </div>
         </div>
       </section>
@@ -158,8 +149,8 @@
           <div id="alerts-list" class="alerts-list"></div>
         </div>
         <div class="dashboard-section">
-          <h3>Recent Alerts Stream</h3>
-          <div id="alerts-stream" class="alerts-stream"></div>
+          <h3>Device Status</h3>
+          <div id="dashboard-devices" class="dashboard-devices-grid"></div>
         </div>
       </section>
 
@@ -167,11 +158,11 @@
       <section id="devices-page" class="page">
         <div class="page-header">
           <h2>Devices</h2>
-          <div style="display: flex; gap: 0.75rem;">
-            <button id="refresh-devices-btn" class="btn-secondary">Refresh</button>
-            <button id="open-device-setup-btn" class="btn-primary">Add Device</button>
-          </div>
         </div>
+        <div style="display: flex; gap: 0.75rem;">
+            <button id="open-device-setup-btn" class="btn-primary">Add Device</button>
+            <button id="refresh-devices-btn" class="btn-secondary">Refresh</button>
+          </div>
         <div id="devices-grid" class="devices-grid"></div>
       </section>
 
@@ -256,7 +247,6 @@
           <h3>General</h3>
           <div class="settings-card">
             <label>
-              Home Name
               <input id="setting-home-name" type="text" placeholder="My Home">
             </label>
             <p class="setting-description">Give your home a custom name</p>

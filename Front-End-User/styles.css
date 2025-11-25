@@ -259,6 +259,52 @@ html, body {
 .dashboard-section {
   margin-bottom: 2rem;
 }
+
+.dashboard-devices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.dashboard-device-item {
+  background: var(--bg-card);
+  border-radius: var(--border-radius);
+  padding: 1rem;
+  border-left: 3px solid var(--accent-primary);
+}
+
+.dashboard-device-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-device-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.dashboard-device-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dashboard-device-type {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dashboard-device-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
 .alerts-filters {
   display: flex;
   gap: 0.75rem;
@@ -338,7 +384,8 @@ html, body {
 
 /* Login Card */
 #login-page,
-#reset-page {
+#reset-page,
+#setup-page {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -719,8 +766,9 @@ button:hover {
 }
 
 .device-status.online {
-  color: var(--accent-success);
-  background: rgba(46, 204, 113, 0.1);
+  color: white;
+  background: #2ecc71;
+  font-weight: 600;
 }
 
 .device-status.offline {
