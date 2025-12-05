@@ -12,7 +12,7 @@ class Settings(BaseModel):
     co_ppm_threshold: float = 70.0
     smoke_threshold: float = 0.6             # arbitrary normalized unit
     temp_rise_threshold_c: float = 12.0      # rapid rise in °C within short window
-    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_origins: list[str] = ["https://localhost:3000", "https://127.0.0.1:3000"]
 
 def get_settings() -> Settings:
     #Could be extended to load from .env in the future.

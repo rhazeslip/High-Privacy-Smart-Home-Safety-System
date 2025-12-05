@@ -1,30 +1,30 @@
-# Simple in-memory user store with roles (Admin/Occupant).
+"""Single admin user helpers.
 
-from typing import Optional, Dict
-from .security import hash_password, verify_password
+This module provides simplified authentication for the single admin user.
+The system only supports one admin user created during initial setup.
+"""
 
-# Demo users (username -> {hashed_pw, role})
-_USERS: Dict[str, dict] = {
-    "admin":   {"hashed_pw": hash_password("admin123"),   "role": "Admin"},
-    "alice":   {"hashed_pw": hash_password("alice123"),   "role": "Occupant"},
-}
+from typing import Optional
+from .security import verify_password
+from . import store
 
-def get_user(username: str) -> Optional[dict]:
-    # Return user record by username.
-    return _USERS.get(username)
 
-def check_credentials(username: str, password: str) -> Optional[str]:
-    # Validate credentials; return role if ok.
-    user = get_user(username)
-    if not user: 
-        return None
-    if verify_password(password, user["hashed_pw"]):
-        return user["role"]
-    return None
+def get_admin() -> Optional[dict]:
+    """Return admin user record or None.
 
-def create_user(username: str, password: str, role: str = "Occupant") -> bool:
-    # Create new user if not exists.
-    if username in _USERS:
+    The returned dict has keys: 'hashed_pw', 'salt'.
+    """
+    return store.db_get_admin()
+
+
+def verify_admin_password(client_hash: str) -> bool:
+    """Validate admin password hash.
+
+    Returns True if valid, False otherwise.
+    """
+    admin = get_admin()
+    if not admin:
         return False
-    _USERS[username] = {"hashed_pw": hash_password(password), "role": role}
-    return True
+    if client_hash is None:
+        return False
+    return verify_password(client_hash, admin["hashed_pw"])

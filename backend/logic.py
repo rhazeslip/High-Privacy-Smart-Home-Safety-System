@@ -14,20 +14,8 @@ def process_reading(reading: SensorReading) -> list[Alert]:
     v = reading.value
     loc = reading.location or "Unknown"
 
-    # Entry points: door/window/garage
-    if t in ("door","window","garage"):
-        # Expect 'open'/'closed' as string value.
-        if isinstance(v, str) and v.lower() == "open":
-            alerts.append(add_alert(Alert(
-                level="warning",
-                title="Entry Open",
-                message=f"{t.capitalize()} opened while armed? Check immediately.",
-                sensor_id=reading.sensor_id,
-                location=loc
-            )))
-
     # Gas / CO in ppm
-    elif t in ("gas","co"):
+    if t in ("gas","co"):
         try:
             ppm = float(v)
         except Exception:
