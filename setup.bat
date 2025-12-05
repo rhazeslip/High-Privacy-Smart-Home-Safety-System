@@ -1,16 +1,16 @@
 @echo off
 REM Smart Home Safety System - Setup Only (no server start)
 
-echo ========================================
+echo ================================================
 echo Smart Home Safety System - Setup
-echo ========================================
+echo ================================================
 echo.
 
 REM Check Python
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Python is not installed or not in PATH
-    echo Please install Python 3.8+ from https://www.python.org/
+    echo Please install the latest version of Python from https://www.python.org/
     pause
     exit /b 1
 )
@@ -46,13 +46,15 @@ if not exist "cert.pem" (
 )
 echo.
 
-echo ========================================
-echo Setup Complete!
-echo ========================================
-echo.
-echo You can now run:
-echo   - start.bat        (Full startup with menu)
-echo   - quick-start.bat  (Quick server startup)
-echo   - stop.bat         (Stop all servers)
+echo ================================================
+echo Setup Complete
+echo. 
+echo Run the program using the following commands:
+echo   - .venv\Scripts\activate.bat  (Activate virtual environment)
+echo   - python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --ssl-keyfile key.pem --ssl-certfile cert.pem (Launch Backend Server)
+echo   - python frontend\serve_https.py (Launch Frontend Server)
+echo Or run:
+echo   - start.bat
+echo ================================================
 echo.
 pause

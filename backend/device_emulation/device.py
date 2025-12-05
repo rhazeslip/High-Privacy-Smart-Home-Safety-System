@@ -313,7 +313,8 @@ def run_simple_ui(state: DeviceState):
         print(f"{'='*60}")
         print("\n  [1] Set Battery Level")
         print("  [2] Change State")
-        print("  [3] Send Event")
+        print("  [3] Send Event (Current Value)")
+        print("  [4] Send Custom Alert")
         print("  [0] Shutdown")
         print(f"{'='*40}\n")
     
@@ -373,6 +374,38 @@ def run_simple_ui(state: DeviceState):
                 else:
                     print(f"✓ Sending event: {state.type}={state.current_value}")
                     asyncio.run(send_event_to_backend(state))
+                input("\nPress Enter to continue...")
+                
+            elif choice == '4':
+                if not state.paired:
+                    print("✗ Device not paired. Cannot send alerts.")
+                elif not state.backend_url:
+                    print("✗ Backend URL not configured.")
+                else:
+                    print("\n--- Send Custom Alert ---")
+                    try:
+                        # Get custom value for the alert
+                        if state.type in ["door", "window", "garage"]:
+                            print("Options: open, closed")
+                            custom_value = input("Enter value: ").strip().lower()
+                            if custom_value not in ["open", "closed"]:
+                                print("✗ Invalid value. Using current value.")
+                                custom_value = state.current_value
+                        else:
+                            custom_input = input(f"Enter {state.type} value (or press Enter for current): ").strip()
+                            if custom_input:
+                                custom_value = float(custom_input)
+                            else:
+                                custom_value = state.current_value
+                        
+                        # Temporarily set the value and send
+                        original_value = state.current_value
+                        state.current_value = custom_value
+                        print(f"✓ Sending custom alert: {state.type}={state.current_value}")
+                        asyncio.run(send_event_to_backend(state))
+                        state.current_value = original_value  # Restore original value
+                    except ValueError:
+                        print("✗ Invalid number")
                 input("\nPress Enter to continue...")
                 
             elif choice == '0':

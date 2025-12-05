@@ -2,11 +2,11 @@
 REM Smart Home Safety System - Stop All Servers
 
 echo ========================================
-echo Stopping Smart Home Safety System
+echo Stop Smart Home Safety System
 echo ========================================
 echo.
 
-echo Stopping Backend Server...
+echo Stopping Backend Server
 taskkill /FI "WindowTitle eq Backend Server*" /T /F >nul 2>&1
 if %errorlevel% equ 0 (
     echo Backend server stopped
@@ -14,7 +14,7 @@ if %errorlevel% equ 0 (
     echo No backend server found running
 )
 
-echo Stopping Frontend Server...
+echo Stopping Frontend Server
 taskkill /FI "WindowTitle eq Frontend Server*" /T /F >nul 2>&1
 if %errorlevel% equ 0 (
     echo Frontend server stopped
@@ -22,12 +22,8 @@ if %errorlevel% equ 0 (
     echo No frontend server found running
 )
 
-echo Stopping Dev Tools Server...
-taskkill /FI "WindowTitle eq Dev Tools Server*" /T /F >nul 2>&1
 
 echo.
-echo ========================================
-echo All servers stopped
-echo ========================================
+echo Finished
 echo.
 pause
