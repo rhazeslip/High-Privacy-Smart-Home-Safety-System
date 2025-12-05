@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Home</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/components.css">
 </head>
 <body>
@@ -16,7 +16,7 @@
       <nav class="nav">
         <button class="nav-item" data-page="dashboard">Dashboard</button>
         <button class="nav-item" data-page="devices">Devices</button>
-        <button class="nav-item" data-page="history">Alerts & History</button>
+        <button class="nav-item" data-page="history">Alerts History</button>
         <button class="nav-item" data-page="settings">Settings</button>
       </nav>
       <div class="sidebar-footer">
@@ -243,7 +243,7 @@
         </div>
       </div>
 
-      <!-- Alerts & History Page -->
+      <!-- Alert History Page -->
       <section id="history-page" class="page">
         <div class="page-header">
           <h2>Alert History</h2>
@@ -273,6 +273,7 @@
           <h3>General</h3>
           <div class="settings-card">
             <label>
+              Home Name
               <input id="setting-home-name" type="text" placeholder="My Home">
             </label>
             <p class="setting-description">Give your home a custom name</p>
@@ -298,16 +299,13 @@
             <h4>Change Password</h4>
             <form id="change-password-form">
               <label>
-                Current Password
-                <input id="setting-current-password" type="password" autocomplete="current-password" required>
+                <input id="setting-current-password" type="password" autocomplete="current-password" placeholder="Current Password" required>
               </label>
               <label>
-                New Password (min 8 characters)
-                <input id="setting-new-password" type="password" autocomplete="new-password" minlength="8" required>
+                <input id="setting-new-password" type="password" autocomplete="new-password" minlength="8" placeholder="New Password" required>
               </label>
               <label>
-                Confirm New Password
-                <input id="setting-confirm-password" type="password" autocomplete="new-password" minlength="8" required>
+                <input id="setting-confirm-password" type="password" autocomplete="new-password" minlength="8" placeholder="Confirm New Password" required>
               </label>
               <div class="password-strength-container" id="settings-password-strength">
                 <div class="password-strength-bar">

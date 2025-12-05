@@ -15,9 +15,19 @@ SENSOR_LAST: Dict[str, SensorReading] = {}
 ALERTS: List[Alert] = []
 
 # SQLite DB path under backend/ so repository is self-contained for dev.
-DB_PATH = os.path.join(os.path.dirname(__file__), 'data.db')
+DB_PATH = os.getenv('HP_SHSS_DB_PATH') or os.path.join(os.path.dirname(__file__), 'data.db')
 _DB = sqlite3.connect(DB_PATH, check_same_thread=False)
 _DB.row_factory = sqlite3.Row
+
+# Enable WAL mode for better concurrency and reliability
+try:
+    from .config import get_settings
+    if get_settings().db_wal_mode:
+        _DB.execute("PRAGMA journal_mode=WAL")
+        _DB.execute("PRAGMA synchronous=NORMAL")  # Good balance of safety and performance
+except Exception:
+    # Fallback if config not available
+    _DB.execute("PRAGMA journal_mode=WAL")
 
 
 def _init_db():
