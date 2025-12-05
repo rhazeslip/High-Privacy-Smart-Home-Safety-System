@@ -1,13 +1,3 @@
-"""
-Emulated Security Device
-A simulated smart home security device that can be discovered and controlled by the backend.
-Supports:
-- Device discovery (responds to discovery pings)
-- Status queries
-- Event generation and sending
-- End-to-end encryption using shared secrets
-"""
-
 import uvicorn
 import socket
 import secrets
@@ -17,6 +7,7 @@ import time
 import random
 import asyncio
 import threading
+import base64
 from typing import Optional, Dict, Any, Literal
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Header
@@ -29,6 +20,94 @@ import os
 # Device types that can be emulated
 DeviceType = Literal["door", "window", "garage", "gas", "co", "water", "fire", "smoke", "temp"]
 
+
+# =============================================================================
+# AES-GCM Encryption Helpers
+# =============================================================================
+def derive_key(shared_secret: str) -> bytes:
+    """Derive a 256-bit AES key from the shared secret using SHA-256."""
+    return hashlib.sha256(shared_secret.encode()).digest()
+
+
+def encrypt_payload(payload: dict, shared_secret: str) -> dict:
+    """Encrypt a JSON payload using AES-GCM.
+    
+    Args:
+        payload: Dictionary to encrypt
+        shared_secret: The shared secret from pairing
+        
+    Returns:
+        Dictionary with 'encrypted', 'nonce', and 'tag' fields (all base64 encoded)
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        # Fallback: return unencrypted if cryptography not available
+        print("⚠ cryptography library not available, sending unencrypted")
+        return {"unencrypted": payload}
+    
+    key = derive_key(shared_secret)
+    aesgcm = AESGCM(key)
+    
+    # Generate a random 96-bit nonce (12 bytes)
+    nonce = secrets.token_bytes(12)
+    
+    # Serialize payload to JSON bytes
+    plaintext = json.dumps(payload).encode('utf-8')
+    
+    # Encrypt (returns ciphertext + 16-byte auth tag appended)
+    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+    
+    # Split ciphertext and tag (last 16 bytes)
+    encrypted_data = ciphertext[:-16]
+    auth_tag = ciphertext[-16:]
+    
+    return {
+        "encrypted": base64.b64encode(encrypted_data).decode('ascii'),
+        "nonce": base64.b64encode(nonce).decode('ascii'),
+        "tag": base64.b64encode(auth_tag).decode('ascii')
+    }
+
+
+def decrypt_payload(encrypted_msg: dict, shared_secret: str) -> dict:
+    """Decrypt an AES-GCM encrypted message.
+    
+    Args:
+        encrypted_msg: Dictionary with 'encrypted', 'nonce', 'tag' fields
+        shared_secret: The shared secret from pairing
+        
+    Returns:
+        Decrypted dictionary payload
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        raise RuntimeError("cryptography library required for decryption")
+    
+    # Check if message is actually unencrypted
+    if "unencrypted" in encrypted_msg:
+        return encrypted_msg["unencrypted"]
+    
+    key = derive_key(shared_secret)
+    aesgcm = AESGCM(key)
+    
+    # Decode base64 fields
+    encrypted_data = base64.b64decode(encrypted_msg["encrypted"])
+    nonce = base64.b64decode(encrypted_msg["nonce"])
+    auth_tag = base64.b64decode(encrypted_msg["tag"])
+    
+    # Reconstruct ciphertext (data + tag)
+    ciphertext = encrypted_data + auth_tag
+    
+    # Decrypt and verify
+    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+    
+    return json.loads(plaintext.decode('utf-8'))
+
+
+# =============================================================================
+# Models
+# =============================================================================
 class DeviceInfo(BaseModel):
     """Information about this device"""
     device_id: str
@@ -173,18 +252,19 @@ def create_device_app(state: DeviceState) -> FastAPI:
         # For simulation, we accept any pairing code or auto-pair
         # In production, would verify the pairing code matches
         if request.pairing_code is None or request.pairing_code == state.pairing_code:
-            # Generate shared secret for encryption
+            # Generate shared secret for AES-GCM encryption
             state.shared_secret = secrets.token_urlsafe(32)
             state.paired = True
             
-            print(f"Device {state.device_id} paired successfully!")
-            print(f"  Shared secret: {state.shared_secret[:16]}...")
+            print(f"🔒 Device {state.device_id} paired successfully!")
+            print(f"   Encryption: AES-256-GCM enabled")
+            print(f"   Shared secret: {state.shared_secret[:8]}...{state.shared_secret[-4:]}")
             
             return PairingResponse(
                 success=True,
                 device_id=state.device_id,
                 shared_secret=state.shared_secret,
-                message="Pairing successful"
+                message="Pairing successful - AES-256-GCM encryption enabled"
             )
         else:
             return PairingResponse(
@@ -247,8 +327,13 @@ def create_device_app(state: DeviceState) -> FastAPI:
     
     return app
 
-async def send_event_to_backend(state: DeviceState):
-    """Send an event to the configured backend"""
+async def send_event_to_backend(state: DeviceState, use_encryption: bool = True):
+    """Send an event to the configured backend.
+    
+    Args:
+        state: Device state containing backend_url, shared_secret, etc.
+        use_encryption: If True and shared_secret exists, encrypt the payload
+    """
     if not state.backend_url or not state.paired:
         return
     
@@ -262,17 +347,36 @@ async def send_event_to_backend(state: DeviceState):
             timestamp=datetime.now(timezone.utc).isoformat()
         )
         
+        payload = event.model_dump()
+        headers = {"Content-Type": "application/json"}
+        
+        # Encrypt payload if shared_secret available and encryption enabled
+        if use_encryption and state.shared_secret:
+            try:
+                encrypted_payload = encrypt_payload(payload, state.shared_secret)
+                payload = {
+                    "device_id": state.device_id,
+                    "encrypted_data": encrypted_payload
+                }
+                headers["X-Encrypted"] = "AES-GCM"
+                print(f"🔒 Sending encrypted event")
+            except Exception as e:
+                print(f"⚠ Encryption failed, sending plaintext: {e}")
+        
         async with httpx.AsyncClient(verify=False) as client:
             response = await client.post(
                 f"{state.backend_url}/sensor",
-                json=event.model_dump(),
+                json=payload,
+                headers=headers,
                 timeout=5.0
             )
             if response.status_code == 200:
-                print(f"Event sent: {state.type}={state.current_value}")
+                print(f"✓ Event sent: {state.type}={state.current_value}")
                 return True
+            else:
+                print(f"✗ Event failed: {response.status_code}")
     except Exception as e:
-        print(f"Failed to send event: {e}")
+        print(f"✗ Failed to send event: {e}")
     return False
 
 

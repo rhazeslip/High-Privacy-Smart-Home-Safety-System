@@ -12,6 +12,17 @@ from backend.store import revoke_refresh_token
 from backend.users import get_admin, verify_admin_password
 import time
 import threading
+import logging
+import asyncio
+from starlette.middleware.base import BaseHTTPMiddleware
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('hp_shss')
+audit_logger = logging.getLogger('hp_shss.audit')
 
 # Rate limiting configuration
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -70,10 +81,27 @@ from backend.store import get_home_settings, update_home_settings
 from backend.security import ACCESS_TOKEN_EXPIRE_MIN
 from fastapi.responses import JSONResponse
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+from pydantic import BaseModel
 
 
 S = get_settings()
 app = FastAPI(title=S.project_name, debug=S.debug)
+
+# Request timeout middleware (30 second default)
+REQUEST_TIMEOUT = 30.0
+
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=REQUEST_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"Request timeout: {request.method} {request.url.path}")
+            return JSONResponse(
+                status_code=504,
+                content={"detail": "Request timeout"}
+            )
+
+app.add_middleware(TimeoutMiddleware)
 
 # Force HTTPS
 app.add_middleware(HTTPSRedirectMiddleware)
@@ -134,6 +162,51 @@ if not S.debug:
         if 'content-type' in resp.headers and resp.headers['content-type'].startswith('application/json'):
             resp.headers['content-type'] = 'application/json; charset=utf-8'
         return resp
+else:
+    # Add security headers even in debug mode
+    @app.middleware("http")
+    async def debug_security_headers_middleware(request: Request, call_next):
+        resp = await call_next(request)
+        resp.headers['X-Frame-Options'] = 'DENY'
+        resp.headers['X-Content-Type-Options'] = 'nosniff'
+        resp.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        return resp
+
+
+# Health check response model
+class HealthResponse(BaseModel):
+    status: str
+    timestamp: str
+    version: str = "1.0.0"
+    database: str = "ok"
+
+
+@app.get("/health", response_model=HealthResponse)
+def health_check():
+    """Health check endpoint for monitoring."""
+    # Basic database connectivity check
+    db_status = "ok"
+    try:
+        from backend.store import _DB
+        _DB.execute("SELECT 1")
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+        logger.error(f"Database health check failed: {e}")
+    
+    return HealthResponse(
+        status="ok" if db_status == "ok" else "degraded",
+        timestamp=datetime.utcnow().isoformat(),
+        database=db_status
+    )
+
+
+# Audit logging helper
+def audit_log(action: str, ip: str, details: str = "", success: bool = True):
+    """Log security-relevant events."""
+    if S.audit_log:
+        status = "SUCCESS" if success else "FAILED"
+        audit_logger.info(f"[{status}] {action} from {ip} - {details}")
+
 
 # Setup wizard endpoints (publicly accessible before setup is complete)
 @app.get("/setup/status", response_model=SetupStatus)
@@ -197,6 +270,7 @@ def reset_password(reset_req: PasswordResetRequest, request: Request):
     # Rate limiting - very strict for password reset
     client_ip = _get_client_ip(request)
     if not _check_rate_limit(client_ip, "reset", MAX_RESET_ATTEMPTS):
+        audit_log("PASSWORD_RESET", client_ip, "Rate limited", success=False)
         raise HTTPException(
             status_code=429,
             detail="Too many password reset attempts. Please try again later."
@@ -221,6 +295,7 @@ def reset_password(reset_req: PasswordResetRequest, request: Request):
         # Add delay to slow down brute force attempts
         import time
         time.sleep(1)
+        audit_log("PASSWORD_RESET", client_ip, "Invalid recovery key", success=False)
         raise HTTPException(status_code=401, detail="Invalid recovery key")
     
     # Generate new password hash
@@ -246,6 +321,8 @@ def reset_password(reset_req: PasswordResetRequest, request: Request):
     
     # Update password in system_config
     db_set_admin_password(hashed_password, salt_b64)
+    
+    audit_log("PASSWORD_RESET", client_ip, "Password reset successful")
     
     return PasswordResetResponse(
         success=True,
@@ -429,6 +506,7 @@ def login(req: LoginRequest, request: Request):
     # Rate limiting check
     client_ip = _get_client_ip(request)
     if not _check_rate_limit(client_ip, "login", MAX_LOGIN_ATTEMPTS):
+        audit_log("LOGIN", client_ip, "Rate limited", success=False)
         raise HTTPException(
             status_code=429, 
             detail="Too many login attempts. Please try again later."
@@ -444,9 +522,11 @@ def login(req: LoginRequest, request: Request):
     if req.client_hash:
         admin = db_get_admin()
         if not admin:
+            audit_log("LOGIN", client_ip, "No admin configured", success=False)
             raise HTTPException(status_code=401, detail="Invalid password")
         # stored hashed_pw is bcrypt() of client_hash
         if not verify_password(req.client_hash, admin['hashed_pw']):
+            audit_log("LOGIN", client_ip, "Invalid password", success=False)
             raise HTTPException(status_code=401, detail="Invalid password")
     else:
         # Fallback: legacy password field (plaintext) - convert to client_hash
@@ -455,15 +535,20 @@ def login(req: LoginRequest, request: Request):
             import base64
             admin = db_get_admin()
             if not admin or not admin.get('salt'):
+                audit_log("LOGIN", client_ip, "No admin configured", success=False)
                 raise HTTPException(status_code=401, detail="Invalid password")
             
             salt = base64.b64decode(admin['salt'])
             client_hash = hashlib.pbkdf2_hmac('sha256', req.password.encode(), salt, 100000).hex()
             
             if not verify_password(client_hash, admin['hashed_pw']):
+                audit_log("LOGIN", client_ip, "Invalid password (legacy)", success=False)
                 raise HTTPException(status_code=401, detail="Invalid password")
         else:
+            audit_log("LOGIN", client_ip, "No password provided", success=False)
             raise HTTPException(status_code=401, detail="Password required")
+    
+    audit_log("LOGIN", client_ip, "Successful login")
     
     token = create_access_token()
     # Set HttpOnly, Secure cookie for the token (frontend will use cookie-based auth).
@@ -533,8 +618,10 @@ def get_salt(request: Request = None):
 
 
 @app.post('/auth/logout')
-def logout(response: Response):
+def logout(request: Request, response: Response):
     # Clear the auth cookie on logout and revoke refresh token if present.
+    client_ip = _get_client_ip(request)
+    audit_log("LOGOUT", client_ip, "User logged out")
     response.delete_cookie('hp_token', path='/')
     # Attempt to revoke refresh token if client sent it.
     # Note: in FastAPI you can read cookies from the Request object; use a
@@ -546,12 +633,14 @@ def logout(response: Response):
 @app.post('/auth/logout_full')
 def logout_full(request: Request, response: Response):
     # Clear cookies and revoke refresh token stored server-side.
+    client_ip = _get_client_ip(request)
     refresh = request.cookies.get('hp_refresh')
     if refresh:
         try:
             revoke_refresh_token(refresh)
         except Exception:
             pass
+    audit_log("LOGOUT_FULL", client_ip, "Full logout with token revocation")
     response.delete_cookie('hp_token', path='/')
     response.delete_cookie('hp_refresh', path='/')
     return {"ok": True}
