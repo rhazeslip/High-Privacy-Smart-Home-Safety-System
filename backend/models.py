@@ -3,7 +3,6 @@
 
 from pydantic import BaseModel, Field
 from typing import Optional, Literal, Union
-from typing import Optional, Literal
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -37,24 +36,21 @@ class StatusResponse(BaseModel):
     sensors_online: int = 0
     alerts_open: int = 0
 
-# Auth-related models for login/token and user info.
-
-from pydantic import BaseModel, Field
-from typing import Literal
+# Auth-related models for login/token (single admin user).
 
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
 class LoginRequest(BaseModel):
-    username: Optional[str] = None  # Optional for password-only mode
+    # Single admin user - username not needed
     # Either provide `password` (legacy) or `client_hash` (PBKDF2 hex) derived with server salt.
     password: Optional[str] = None
     client_hash: Optional[str] = None
 
 class UserInfo(BaseModel):
-    username: str
-    role: Literal["Admin","Occupant"]
+    """Simplified user info - single admin user only."""
+    authenticated: bool = True
 
 
 # Setup wizard models

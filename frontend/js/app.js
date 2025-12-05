@@ -105,6 +105,12 @@ const app = {
                 await this.handlePasswordReset();
             });
         }
+        
+        // Password strength meter for reset page
+        const resetPasswordInput = document.getElementById('reset-new-password');
+        if (resetPasswordInput) {
+            resetPasswordInput.addEventListener('input', (e) => this.updateResetPasswordStrength(e.target.value));
+        }
 
         // Logout
         document.getElementById('logout').addEventListener('click', () => this.handleLogout());
@@ -149,6 +155,12 @@ const app = {
                 e.preventDefault();
                 this.changePassword();
             });
+        }
+        
+        // Password strength meter for settings page
+        const settingsPasswordInput = document.getElementById('setting-new-password');
+        if (settingsPasswordInput) {
+            settingsPasswordInput.addEventListener('input', (e) => this.updateSettingsPasswordStrength(e.target.value));
         }
 
         // Device Setup Wizard
@@ -196,6 +208,34 @@ const app = {
         if (step2CompleteBtn) step2CompleteBtn.addEventListener('click', () => this.completeSetup());
         if (copyRecoveryBtn) copyRecoveryBtn.addEventListener('click', () => this.copyRecoveryKey());
         if (finishSetupBtn) finishSetupBtn.addEventListener('click', () => this.finishSetup());
+        
+        // Enter key handler for setup step 1 (home name)
+        const setupHomeNameInput = document.getElementById('setup-home-name');
+        if (setupHomeNameInput) {
+            setupHomeNameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.setupNextStep(2);
+                }
+            });
+        }
+        
+        // Enter key handler for setup step 2 (confirm password field)
+        const setupConfirmPasswordInput = document.getElementById('setup-confirm-password');
+        if (setupConfirmPasswordInput) {
+            setupConfirmPasswordInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.completeSetup();
+                }
+            });
+        }
+        
+        // Password strength meter
+        const setupPasswordInput = document.getElementById('setup-password');
+        if (setupPasswordInput) {
+            setupPasswordInput.addEventListener('input', (e) => this.updatePasswordStrength(e.target.value));
+        }
         
         // Setup wizard recovery confirmation
         const recoveryCheckbox = document.getElementById('recovery-confirmed');
@@ -1029,6 +1069,245 @@ const app = {
         this.setupComplete = true;
         // Reload the page to start fresh with login
         window.location.reload();
+    },
+
+    calculatePasswordStrength(password) {
+        if (!password) return { score: 0, strength: '', requirements: {}, warning: '' };
+        
+        let score = 0;
+        let warning = '';
+        const requirements = {
+            length: password.length >= 8,
+            uppercase: /[A-Z]/.test(password),
+            lowercase: /[a-z]/.test(password),
+            number: /[0-9]/.test(password),
+            special: /[^A-Za-z0-9]/.test(password)
+        };
+        
+        // Common words and patterns to check (case-insensitive)
+        const commonWords = [
+            'password', 'admin', 'user', 'login', 'welcome', 'letmein', 'monkey',
+            'qwerty', 'abc123', 'master', 'password1', 'password123', 'admin123',
+            'root', 'test', 'guest', 'security', 'home', 'house', 'safe', 'system'
+        ];
+        
+        const passwordLower = password.toLowerCase();
+        
+        // Check for common words
+        const foundWord = commonWords.find(word => passwordLower.includes(word));
+        if (foundWord) {
+            score -= 30; // Heavy penalty
+            warning = 'Avoid common words';
+        }
+        
+        // Check for dictionary-like words (4+ consecutive letters)
+        const longLetterSequences = password.match(/[a-zA-Z]{4,}/g);
+        if (longLetterSequences && longLetterSequences.length > 0) {
+            // Check if it's mostly letters (potential dictionary word)
+            const letterCount = (password.match(/[a-zA-Z]/g) || []).length;
+            if (letterCount / password.length > 0.7) {
+                score -= 15;
+                if (!warning) warning = 'Avoid dictionary words';
+            }
+        }
+        
+        // Check for sequential characters (abc, 123, etc.)
+        if (/abc|bcd|cde|def|efg|fgh|ghi|hij|ijk|jkl|klm|lmn|mno|nop|opq|pqr|qrs|rst|stu|tuv|uvw|vwx|wxy|xyz/i.test(password)) {
+            score -= 10;
+            if (!warning) warning = 'Avoid sequences';
+        }
+        if (/012|123|234|345|456|567|678|789/.test(password)) {
+            score -= 10;
+            if (!warning) warning = 'Avoid sequences';
+        }
+        
+        // Check for repeated characters (aaa, 111, etc.)
+        if (/(.)\1{2,}/.test(password)) {
+            score -= 10;
+            if (!warning) warning = 'Avoid repetition';
+        }
+        
+        // Base score for length
+        if (requirements.length) score += 20;
+        if (password.length >= 12) score += 10;
+        if (password.length >= 16) score += 10;
+        
+        // Character type diversity
+        if (requirements.uppercase) score += 15;
+        if (requirements.lowercase) score += 15;
+        if (requirements.number) score += 15;
+        if (requirements.special) score += 15;
+        
+        // Ensure score doesn't go negative
+        score = Math.max(0, score);
+        
+        // Determine strength level
+        let strength = '';
+        if (score < 40) {
+            strength = 'weak';
+        } else if (score < 70) {
+            strength = 'medium';
+        } else {
+            strength = 'strong';
+        }
+        
+        return { score, strength, requirements, warning };
+    },
+
+    updatePasswordStrength(password) {
+        const result = this.calculatePasswordStrength(password);
+        const fill = document.getElementById('password-strength-fill');
+        const text = document.getElementById('password-strength-text');
+        
+        if (!fill || !text) return;
+        
+        // Update visual indicator
+        fill.className = 'password-strength-fill';
+        text.className = 'password-strength-text';
+        
+        if (password.length === 0) {
+            fill.classList.remove('weak', 'medium', 'strong');
+            text.textContent = '';
+        } else {
+            fill.classList.add(result.strength);
+            text.classList.add(result.strength);
+            
+            const strengthLabels = {
+                weak: 'Weak',
+                medium: 'Medium',
+                strong: 'Strong'
+            };
+            
+            let strengthText = `Password Strength: ${strengthLabels[result.strength]}`;
+            if (result.warning) {
+                strengthText += ` - ${result.warning}`;
+            }
+            text.textContent = strengthText;
+        }
+        
+        // Update requirement checklist
+        const reqElements = {
+            length: document.getElementById('req-length'),
+            uppercase: document.getElementById('req-uppercase'),
+            lowercase: document.getElementById('req-lowercase'),
+            number: document.getElementById('req-number'),
+            special: document.getElementById('req-special')
+        };
+        
+        Object.keys(reqElements).forEach(key => {
+            const element = reqElements[key];
+            if (element) {
+                if (result.requirements[key]) {
+                    element.classList.add('met');
+                } else {
+                    element.classList.remove('met');
+                }
+            }
+        });
+    },
+
+    updateResetPasswordStrength(password) {
+        const result = this.calculatePasswordStrength(password);
+        const fill = document.getElementById('reset-password-strength-fill');
+        const text = document.getElementById('reset-password-strength-text');
+        
+        if (!fill || !text) return;
+        
+        // Update visual indicator
+        fill.className = 'password-strength-fill';
+        text.className = 'password-strength-text';
+        
+        if (password.length === 0) {
+            fill.classList.remove('weak', 'medium', 'strong');
+            text.textContent = '';
+        } else {
+            fill.classList.add(result.strength);
+            text.classList.add(result.strength);
+            
+            const strengthLabels = {
+                weak: 'Weak',
+                medium: 'Medium',
+                strong: 'Strong'
+            };
+            
+            let strengthText = `Password Strength: ${strengthLabels[result.strength]}`;
+            if (result.warning) {
+                strengthText += ` - ${result.warning}`;
+            }
+            text.textContent = strengthText;
+        }
+        
+        // Update requirement checklist
+        const reqElements = {
+            length: document.getElementById('reset-req-length'),
+            uppercase: document.getElementById('reset-req-uppercase'),
+            lowercase: document.getElementById('reset-req-lowercase'),
+            number: document.getElementById('reset-req-number'),
+            special: document.getElementById('reset-req-special')
+        };
+        
+        Object.keys(reqElements).forEach(key => {
+            const element = reqElements[key];
+            if (element) {
+                if (result.requirements[key]) {
+                    element.classList.add('met');
+                } else {
+                    element.classList.remove('met');
+                }
+            }
+        });
+    },
+
+    updateSettingsPasswordStrength(password) {
+        const result = this.calculatePasswordStrength(password);
+        const fill = document.getElementById('settings-password-strength-fill');
+        const text = document.getElementById('settings-password-strength-text');
+        
+        if (!fill || !text) return;
+        
+        // Update visual indicator
+        fill.className = 'password-strength-fill';
+        text.className = 'password-strength-text';
+        
+        if (password.length === 0) {
+            fill.classList.remove('weak', 'medium', 'strong');
+            text.textContent = '';
+        } else {
+            fill.classList.add(result.strength);
+            text.classList.add(result.strength);
+            
+            const strengthLabels = {
+                weak: 'Weak',
+                medium: 'Medium',
+                strong: 'Strong'
+            };
+            
+            let strengthText = `Password Strength: ${strengthLabels[result.strength]}`;
+            if (result.warning) {
+                strengthText += ` - ${result.warning}`;
+            }
+            text.textContent = strengthText;
+        }
+        
+        // Update requirement checklist
+        const reqElements = {
+            length: document.getElementById('settings-req-length'),
+            uppercase: document.getElementById('settings-req-uppercase'),
+            lowercase: document.getElementById('settings-req-lowercase'),
+            number: document.getElementById('settings-req-number'),
+            special: document.getElementById('settings-req-special')
+        };
+        
+        Object.keys(reqElements).forEach(key => {
+            const element = reqElements[key];
+            if (element) {
+                if (result.requirements[key]) {
+                    element.classList.add('met');
+                } else {
+                    element.classList.remove('met');
+                }
+            }
+        });
     }
 };
 

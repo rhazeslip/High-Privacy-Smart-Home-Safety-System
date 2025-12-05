@@ -4,23 +4,23 @@ echo Smart Home Safety System - Startup
 echo ========================================
 echo.
 
-REM Check if Python is installed
-python --version >nul 2>&1
+REM Check if py is installed
+py --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Python is not installed or not in PATH
-    echo Please install Python 3.8 or higher from https://www.python.org/
+    echo [ERROR] py is not installed or not in PATH
+    echo Please install py 3.8 or higher from https://www.py.org/
     pause
     exit /b 1
 )
 
-echo Python version:
-python --version
+echo py version:
+py --version
 echo.
 
 REM Check if virtual environment exists
 if not exist ".venv\" (
     echo Creating virtual environment
-    python -m venv .venv
+    py -m venv .venv
     if %errorlevel% neq 0 (
         echo [ERROR] Failed to create virtual environment
         pause
@@ -61,7 +61,7 @@ REM Check if certificates exist
 if not exist "cert.pem" (
     echo Generating self-signed certificate
     if exist "tools\make_selfsigned_cert.py" (
-        python tools\make_selfsigned_cert.py
+        py tools\make_selfsigned_cert.py
     ) else (
         echo [ERROR] Certificate generation script not found
         echo Please create cert.pem and key.pem manually
@@ -76,7 +76,7 @@ echo.
 echo ========================================
 echo Starting Backend Server (Port 8000)
 echo ========================================
-start "Backend Server" cmd /k "cd /d %CD% && .venv\Scripts\activate.bat && python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --ssl-keyfile key.pem --ssl-certfile cert.pem"
+start "Backend Server" cmd /k "cd /d %CD% && .venv\Scripts\activate.bat && py -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --ssl-keyfile key.pem --ssl-certfile cert.pem"
 
 REM Wait a moment for backend to start
 timeout /t 3 /nobreak >nul
@@ -85,7 +85,7 @@ echo.
 echo ========================================
 echo Starting Frontend Server (Port 3000)
 echo ========================================
-start "Frontend Server" cmd /k "cd /d %CD%\Front-End-User && python serve_https.py"
+start "Frontend Server" cmd /k "cd /d %CD%\frontend && py serve_https.py"
 
 REM Wait a moment for frontend to start
 timeout /t 2 /nobreak >nul
@@ -137,8 +137,8 @@ if "%choice%"=="3" (
 )
 if "%choice%"=="4" (
     echo.
-    echo Running Python processes:
-    powershell -Command "Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime | Format-Table -AutoSize"
+    echo Running py processes:
+    powershell -Command "Get-Process py -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime | Format-Table -AutoSize"
     echo.
     pause
     goto MENU

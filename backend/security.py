@@ -26,12 +26,12 @@ def verify_password(plain: str, hashed: str) -> bool:
     # Verify plain password against hashed password.
     return pwd_context.verify(plain, hashed)
 
-def create_access_token(sub: str, role: str, expires_minutes: Optional[int] = None) -> str:
-    # Create a signed JWT with subject (username) and role.
+def create_access_token(expires_minutes: Optional[int] = None) -> str:
+    """Create a signed JWT for the single admin user."""
     expire_min = expires_minutes if expires_minutes is not None else ACCESS_TOKEN_EXPIRE_MIN
     expire = datetime.utcnow() + timedelta(minutes=expire_min)
     # include a jti to allow future revocation lists
-    payload = {"sub": sub, "role": role, "exp": expire, "jti": secrets.token_urlsafe(8)}
+    payload = {"sub": "admin", "exp": expire, "jti": secrets.token_urlsafe(8)}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 def decode_token(token: str) -> dict:
@@ -39,8 +39,8 @@ def decode_token(token: str) -> dict:
     return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
 
 
-def create_refresh_token(username: str, days: int = 7) -> tuple[str, datetime]:
-    """Create a random refresh token, return (token, expires_at) and persist it.
+def create_refresh_token(days: int = 7) -> tuple[str, datetime]:
+    """Create a random refresh token for admin, return (token, expires_at) and persist it.
 
     Uses the backend.store persistence layer so refresh tokens survive restarts.
     """
@@ -51,27 +51,38 @@ def create_refresh_token(username: str, days: int = 7) -> tuple[str, datetime]:
 
     token = _secrets.token_urlsafe(32)
     expires_at = _dt.utcnow() + _td(days=days)
-    _store.save_refresh_token(token, username, expires_at)
+    _store.save_refresh_token(token, expires_at)
     return token, expires_at
 
 
-def verify_refresh_token(token: str) -> Optional[str]:
-    """Verify refresh token exists and not expired. Returns username if valid.
-
-    Returns None if invalid/expired.
-    """
+def verify_refresh_token(token: str) -> bool:
+    """Verify refresh token exists and not expired. Returns True if valid."""
     from datetime import datetime as _dt
     from . import store as _store
 
     rec = _store.get_refresh_token(token)
     if not rec:
-        return None
+        return False
     try:
         expires = _dt.fromisoformat(rec['expires_at'])
     except Exception:
-        return None
+        return False
     if _dt.utcnow() > expires:
         # expired — remove record
         _store.revoke_refresh_token(token)
-        return None
-    return rec['username']
+        return False
+    return True
+
+
+def hash_recovery_key(recovery_key: str) -> str:
+    """Hash a recovery key for secure storage using SHA-256."""
+    import hashlib
+    return hashlib.sha256(recovery_key.encode()).hexdigest()
+
+
+def verify_recovery_key(provided_key: str, stored_hash: str) -> bool:
+    """Securely compare recovery key against stored hash."""
+    import hmac
+    import hashlib
+    provided_hash = hashlib.sha256(provided_key.encode()).hexdigest()
+    return hmac.compare_digest(provided_hash, stored_hash)

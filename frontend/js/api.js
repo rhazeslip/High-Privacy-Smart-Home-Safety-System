@@ -30,23 +30,22 @@ const api = {
         return Array.from(hashBytes).map(b => b.toString(16).padStart(2, '0')).join('');
     },
 
-    // Get per-user salt from server (base64)
-    async getSalt(username = null) {
-        const url = username ? `/auth/salt?username=${encodeURIComponent(username)}` : '/auth/salt';
-        return this.request(url);
+    // Get admin salt from server (base64)
+    async getSalt() {
+        return this.request('/auth/salt');
     },
 
-    // Auth endpoints: login now performs client-side PBKDF2 using salt returned from server
-    async login(password, username = null) {
-        // Fetch salt (defaults to admin user if no username)
-        const saltResp = await this.getSalt(username);
+    // Auth endpoints: login performs client-side PBKDF2 using salt returned from server
+    async login(password) {
+        // Fetch salt for admin
+        const saltResp = await this.getSalt();
         const salt = saltResp && saltResp.salt;
         if (!salt) throw new Error('Unable to retrieve salt');
         const client_hash = await this._deriveClientHash(password, salt);
         // Send client_hash (hex) to login endpoint
         return this.request('/auth/login', {
             method: 'POST',
-            body: JSON.stringify({ username, client_hash, password: null })
+            body: JSON.stringify({ client_hash })
         });
     },
 

@@ -441,6 +441,7 @@ input, select {
 }
 
 .empty-state {
+    grid-column: 1 / -1;
     text-align: center;
     color: var(--text-secondary);
     padding: 2rem;
@@ -675,6 +676,78 @@ input, select {
     margin-top: 0.5rem;
     font-size: 0.875rem;
     min-height: 1.2rem;
+}
+
+.password-strength-container {
+    margin-top: 0.75rem;
+    width: 100%;
+}
+
+.password-strength-bar {
+    height: 4px;
+    width: 100%;
+    background-color: var(--bg-secondary);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.password-strength-fill {
+    height: 100%;
+    width: 0;
+    transition: all 0.3s ease;
+    border-radius: 2px;
+}
+
+.password-strength-fill.weak {
+    width: 33%;
+    background-color: var(--accent-danger);
+}
+
+.password-strength-fill.medium {
+    width: 66%;
+    background-color: var(--accent-warning);
+}
+
+.password-strength-fill.strong {
+    width: 100%;
+    background-color: var(--accent-success);
+}
+
+.password-strength-text {
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.password-strength-text.weak {
+    color: var(--accent-danger);
+}
+
+.password-strength-text.medium {
+    color: var(--accent-warning);
+}
+
+.password-strength-text.strong {
+    color: var(--accent-success);
+}
+
+.password-requirements {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.password-requirements ul {
+    margin: 0.25rem 0 0 1.25rem;
+    padding: 0;
+}
+
+.password-requirements li {
+    margin: 0.125rem 0;
+}
+
+.password-requirements li.met {
+    color: var(--accent-success);
 }
 
 @keyframes fadeIn {

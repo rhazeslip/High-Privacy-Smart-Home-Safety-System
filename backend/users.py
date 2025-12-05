@@ -1,42 +1,30 @@
-"""DB-backed user helpers.
+"""Single admin user helpers.
 
-This module delegates persistence to `backend.store` (SQLite). It keeps the
-same function names/signatures used elsewhere in the codebase so existing
-callers (tests and auth routes) continue to work.
+This module provides simplified authentication for the single admin user.
+The system only supports one admin user created during initial setup.
 """
 
 from typing import Optional
-from .security import hash_password, verify_password
+from .security import verify_password
 from . import store
 
 
-def get_user(username: str) -> Optional[dict]:
-    """Return user record by username or None.
+def get_admin() -> Optional[dict]:
+    """Return admin user record or None.
 
-    The returned dict has keys: 'username', 'hashed_pw', 'role'.
+    The returned dict has keys: 'hashed_pw', 'salt'.
     """
-    return store.db_get_user(username)
+    return store.db_get_admin()
 
 
-def check_credentials(username: str, password: str) -> Optional[str]:
-    """Validate credentials; return role if ok.
+def verify_admin_password(client_hash: str) -> bool:
+    """Validate admin password hash.
 
-    Returns None on failure.
+    Returns True if valid, False otherwise.
     """
-    user = get_user(username)
-    if not user:
-        return None
-    if password is None:
-        # No password provided — do not authenticate.
-        return None
-    if verify_password(password, user["hashed_pw"]):
-        return user["role"]
-    return None
-
-
-def create_user(username: str, password: str, role: str = "Occupant") -> bool:
-    """Create new user if not exists. Password is hashed before storing."""
-    if store.db_get_user(username):
+    admin = get_admin()
+    if not admin:
         return False
-    hashed = hash_password(password)
-    return store.db_create_user(username, hashed, role)
+    if client_hash is None:
+        return False
+    return verify_password(client_hash, admin["hashed_pw"])

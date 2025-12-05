@@ -1,15 +1,59 @@
 # backend/main.py
 # FastAPI app for HP-SHSS Edge Hub
 
-from typing import List, Optional
-from datetime import datetime
+from typing import List, Optional, Dict
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from backend.logic import process_reading
 from backend.config import get_settings
 from backend.security import create_access_token, decode_token, create_refresh_token, verify_refresh_token, verify_password
 from backend.store import revoke_refresh_token
-from backend.users import check_credentials
+from backend.users import get_admin, verify_admin_password
+import time
+import threading
+
+# Rate limiting configuration
+RATE_LIMIT_WINDOW = 60  # seconds
+MAX_LOGIN_ATTEMPTS = 5  # max attempts per window
+MAX_SALT_REQUESTS = 10  # max salt requests per window
+MAX_RESET_ATTEMPTS = 3  # max password reset attempts per window
+
+# Thread-safe rate limiting storage
+_rate_limit_lock = threading.Lock()
+_rate_limits: Dict[str, Dict[str, any]] = {}  # IP -> {"login": (count, window_start), ...}
+
+def _check_rate_limit(ip: str, action: str, max_attempts: int) -> bool:
+    """Check if request should be rate limited. Returns True if allowed."""
+    now = time.time()
+    with _rate_limit_lock:
+        if ip not in _rate_limits:
+            _rate_limits[ip] = {}
+        
+        if action not in _rate_limits[ip]:
+            _rate_limits[ip][action] = {"count": 1, "window_start": now}
+            return True
+        
+        data = _rate_limits[ip][action]
+        # Check if window has expired
+        if now - data["window_start"] > RATE_LIMIT_WINDOW:
+            _rate_limits[ip][action] = {"count": 1, "window_start": now}
+            return True
+        
+        # Check if under limit
+        if data["count"] < max_attempts:
+            data["count"] += 1
+            return True
+        
+        return False
+
+def _get_client_ip(request: Request) -> str:
+    """Get client IP, considering proxy headers."""
+    # Check for forwarded headers (reverse proxy)
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 #  Absolute imports so we can run "uvicorn backend.main:app" from project root.
 from backend.models import (
@@ -45,7 +89,7 @@ app.add_middleware(
 
 # Auth helpers (placed early so routes can reference them)
 def get_current_user(request: Request, authorization: Optional[str] = Header(None)) -> UserInfo:
-    # Parse token from Authorization header (Bearer) or fallback to secure cookie.
+    """Verify authentication for single admin user."""
     token = None
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1]
@@ -58,20 +102,15 @@ def get_current_user(request: Request, authorization: Optional[str] = Header(Non
 
     try:
         claims = decode_token(token)
-        username = claims.get("sub")
-        role = claims.get("role")
-        if not username or not role:
-            raise ValueError("Bad token claims")
-        return UserInfo(username=username, role=role)
+        if claims.get("sub") != "admin":
+            raise ValueError("Invalid token")
+        return UserInfo(authenticated=True)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-def require_admin(user: UserInfo = Depends(get_current_user)) -> UserInfo:
-    # EN: Only allow Admin role for certain endpoints.
-    if user.role != "Admin":
-        raise HTTPException(status_code=403, detail="Admin role required")
-    return user
+# Simplified: all authenticated users are admin
+require_admin = get_current_user
 
 # Redirect HTTP -> HTTPS in non-debug/production runs. This is a simple
 # safety measure; when running behind a reverse proxy you may prefer the
@@ -128,7 +167,8 @@ def complete_setup(setup: SetupRequest):
     import hashlib
     import base64
     import os
-    from backend.security import hash_password
+    from backend.security import hash_password, hash_recovery_key
+    from backend.store import db_set_admin_password
     
     salt = os.urandom(16)
     salt_b64 = base64.b64encode(salt).decode()
@@ -137,19 +177,12 @@ def complete_setup(setup: SetupRequest):
     client_hash = hashlib.pbkdf2_hmac('sha256', setup.admin_password.encode(), salt, 100000).hex()
     hashed_password = hash_password(client_hash)
     
-    # Store admin user with 'admin' as username for compatibility
-    from backend.store import _DB
-    cur = _DB.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO users(username, hashed_pw, role, salt) VALUES (?, ?, ?, ?)",
-        ('admin', hashed_password, 'Admin', salt_b64)
-    )
-    _DB.commit()
+    # Store admin credentials in system_config
+    db_set_admin_password(hashed_password, salt_b64)
     
-    # Store system configuration
+    # Store system configuration - hash the recovery key before storing
     set_home_name(setup.home_name)
-    set_recovery_key(recovery_key)
-    set_system_config('admin_salt', salt_b64)
+    set_recovery_key(hash_recovery_key(recovery_key))  # Store hashed, not plaintext
     mark_setup_complete()
     
     return SetupResponse(
@@ -159,8 +192,16 @@ def complete_setup(setup: SetupRequest):
     )
 
 @app.post("/auth/reset-password", response_model=PasswordResetResponse)
-def reset_password(reset_req: PasswordResetRequest):
+def reset_password(reset_req: PasswordResetRequest, request: Request):
     """Reset password using recovery key"""
+    # Rate limiting - very strict for password reset
+    client_ip = _get_client_ip(request)
+    if not _check_rate_limit(client_ip, "reset", MAX_RESET_ATTEMPTS):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many password reset attempts. Please try again later."
+        )
+    
     # Check if setup is complete
     if not is_setup_complete():
         raise HTTPException(status_code=400, detail="System setup not completed")
@@ -173,9 +214,13 @@ def reset_password(reset_req: PasswordResetRequest):
     if len(reset_req.new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     
-    # Verify recovery key
-    stored_key = get_recovery_key()
-    if not stored_key or reset_req.recovery_key != stored_key:
+    # Verify recovery key (stored key is hashed)
+    from backend.security import verify_recovery_key
+    stored_key_hash = get_recovery_key()
+    if not stored_key_hash or not verify_recovery_key(reset_req.recovery_key, stored_key_hash):
+        # Add delay to slow down brute force attempts
+        import time
+        time.sleep(1)
         raise HTTPException(status_code=401, detail="Invalid recovery key")
     
     # Generate new password hash
@@ -183,12 +228,12 @@ def reset_password(reset_req: PasswordResetRequest):
     import base64
     import os
     from backend.security import hash_password
-    from backend.users import get_user
+    from backend.store import db_get_admin, db_set_admin_password
     
-    # Get existing admin user to preserve salt or generate new one
-    user = get_user('admin')
-    if user and user.get('salt'):
-        salt_b64 = user['salt']
+    # Get existing admin to preserve salt or generate new one
+    admin = db_get_admin()
+    if admin and admin.get('salt'):
+        salt_b64 = admin['salt']
         salt = base64.b64decode(salt_b64)
     else:
         # Generate new salt if somehow missing
@@ -199,19 +244,8 @@ def reset_password(reset_req: PasswordResetRequest):
     client_hash = hashlib.pbkdf2_hmac('sha256', reset_req.new_password.encode(), salt, 100000).hex()
     hashed_password = hash_password(client_hash)
     
-    # Update password in database
-    from backend.store import _DB
-    cur = _DB.cursor()
-    cur.execute(
-        "UPDATE users SET hashed_pw = ?, salt = ? WHERE username = ?",
-        (hashed_password, salt_b64, 'admin')
-    )
-    _DB.commit()
-    
-    # Optionally rotate recovery key for security
-    # import secrets
-    # new_recovery_key = secrets.token_urlsafe(32)
-    # set_recovery_key(new_recovery_key)
+    # Update password in system_config
+    db_set_admin_password(hashed_password, salt_b64)
     
     return PasswordResetResponse(
         success=True,
@@ -220,26 +254,22 @@ def reset_password(reset_req: PasswordResetRequest):
 
 @app.post("/auth/change-password", response_model=PasswordResetResponse)
 def change_password(change_req: ChangePasswordRequest, user: UserInfo = Depends(get_current_user)):
-    """Change password for authenticated user"""
+    """Change password for admin user"""
     from backend.security import hash_password, verify_password
-    from backend.users import get_user
-    from backend.store import _DB
+    from backend.store import db_get_admin, db_set_admin_password
     import hashlib
     import base64
     import os
     
-    # Get current user from database
-    db_user = get_user(user.username)
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Get admin credentials
+    admin = db_get_admin()
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin not configured")
     
     # Verify current password
-    stored_hash = db_user.get('hashed_pw')
+    stored_hash = admin.get('hashed_pw')
     if not stored_hash:
         raise HTTPException(status_code=400, detail="No password set")
-    
-    # Hash the provided current password hash (since client sends PBKDF2 hash)
-    current_hash_final = hash_password(change_req.current_password_hash)
     
     if not verify_password(change_req.current_password_hash, stored_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
@@ -248,8 +278,8 @@ def change_password(change_req: ChangePasswordRequest, user: UserInfo = Depends(
     if len(change_req.new_password) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
     
-    # Get user's salt
-    salt_b64 = db_user.get('salt')
+    # Get admin's salt
+    salt_b64 = admin.get('salt')
     if not salt_b64:
         # Generate new salt if missing
         salt = os.urandom(16)
@@ -261,13 +291,8 @@ def change_password(change_req: ChangePasswordRequest, user: UserInfo = Depends(
     new_client_hash = hashlib.pbkdf2_hmac('sha256', change_req.new_password.encode(), salt, 100000).hex()
     new_hashed_password = hash_password(new_client_hash)
     
-    # Update password in database
-    cur = _DB.cursor()
-    cur.execute(
-        "UPDATE users SET hashed_pw = ?, salt = ? WHERE username = ?",
-        (new_hashed_password, salt_b64, user.username)
-    )
-    _DB.commit()
+    # Update password in system_config
+    db_set_admin_password(new_hashed_password, salt_b64)
     
     return PasswordResetResponse(
         success=True,
@@ -286,8 +311,49 @@ def test():
     return StatusResponse(sensors_online=len(SENSOR_LAST), alerts_open=count_open_alerts())
 
 @app.post("/sensor", response_model=dict)
-def ingest_sensor(reading: SensorReading):
-    # Ingest a sensor reading, save last reading, and run alert logic.
+def ingest_sensor(reading: SensorReading, request: Request):
+    """Ingest a sensor reading. Requires device authentication via shared secret."""
+    from backend.store import get_device
+    import hmac
+    import hashlib
+    
+    # Verify device is registered and paired
+    device = get_device(reading.sensor_id)
+    if not device:
+        raise HTTPException(status_code=401, detail="Unknown device")
+    
+    if not device.get('paired'):
+        raise HTTPException(status_code=401, detail="Device not paired")
+    
+    # Verify device authentication via X-Device-Auth header
+    # Format: HMAC-SHA256 of sensor_id + timestamp, using shared_secret
+    auth_header = request.headers.get('X-Device-Auth')
+    timestamp_header = request.headers.get('X-Device-Timestamp')
+    
+    if device.get('shared_secret'):
+        if not auth_header or not timestamp_header:
+            raise HTTPException(status_code=401, detail="Device authentication required")
+        
+        # Check timestamp is within 5 minutes to prevent replay attacks
+        try:
+            req_time = datetime.fromisoformat(timestamp_header.replace('Z', '+00:00'))
+            now = datetime.utcnow().replace(tzinfo=req_time.tzinfo) if req_time.tzinfo else datetime.utcnow()
+            if abs((now - req_time).total_seconds()) > 300:
+                raise HTTPException(status_code=401, detail="Request timestamp expired")
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid timestamp format")
+        
+        # Verify HMAC
+        expected_sig = hmac.new(
+            device['shared_secret'].encode(),
+            f"{reading.sensor_id}{timestamp_header}".encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(auth_header, expected_sig):
+            raise HTTPException(status_code=401, detail="Invalid device authentication")
+    
+    # Ingest the reading
     save_reading(reading)
     
     # Update device last_seen timestamp
@@ -358,47 +424,48 @@ def ack_alert(alert_id: str):
 
 # Auth routes
 @app.post("/auth/login", response_model=Token)
-def login(req: LoginRequest):
-    """Login with password (username optional for backward compatibility)"""
+def login(req: LoginRequest, request: Request):
+    """Login with password (single admin user)"""
+    # Rate limiting check
+    client_ip = _get_client_ip(request)
+    if not _check_rate_limit(client_ip, "login", MAX_LOGIN_ATTEMPTS):
+        raise HTTPException(
+            status_code=429, 
+            detail="Too many login attempts. Please try again later."
+        )
+    
     # Check if setup is complete
     if not is_setup_complete():
         raise HTTPException(status_code=400, detail="System setup not completed")
     
-    role = None
-    username = req.username or 'admin'  # Default to admin for password-only mode
+    from backend.store import db_get_admin
     
     # If client_hash provided, verify against stored bcrypt hash
-    if getattr(req, 'client_hash', None):
-        from backend.users import get_user
-        user = get_user(username)
-        if not user:
+    if req.client_hash:
+        admin = db_get_admin()
+        if not admin:
             raise HTTPException(status_code=401, detail="Invalid password")
         # stored hashed_pw is bcrypt() of client_hash
-        if not verify_password(req.client_hash, user['hashed_pw']):
+        if not verify_password(req.client_hash, admin['hashed_pw']):
             raise HTTPException(status_code=401, detail="Invalid password")
-        role = user.get('role')
     else:
         # Fallback: legacy password field (plaintext) - convert to client_hash
         if req.password:
             import hashlib
-            # Get salt from system config or user record
-            from backend.users import get_user
-            user = get_user(username)
-            if not user or not user.get('salt'):
+            import base64
+            admin = db_get_admin()
+            if not admin or not admin.get('salt'):
                 raise HTTPException(status_code=401, detail="Invalid password")
             
-            salt_b64 = user['salt']
-            import base64
-            salt = base64.b64decode(salt_b64)
+            salt = base64.b64decode(admin['salt'])
             client_hash = hashlib.pbkdf2_hmac('sha256', req.password.encode(), salt, 100000).hex()
             
-            if not verify_password(client_hash, user['hashed_pw']):
+            if not verify_password(client_hash, admin['hashed_pw']):
                 raise HTTPException(status_code=401, detail="Invalid password")
-            role = user.get('role')
         else:
             raise HTTPException(status_code=401, detail="Password required")
     
-    token = create_access_token(sub=username, role=role)
+    token = create_access_token()
     # Set HttpOnly, Secure cookie for the token (frontend will use cookie-based auth).
     resp = JSONResponse(content={"access_token": token, "token_type": "bearer"})
     # Max-Age in seconds
@@ -414,15 +481,15 @@ def login(req: LoginRequest):
     )
     # Also create a long-lived refresh token (HttpOnly cookie) so clients can
     # obtain new access tokens without re-prompting credentials.
-    refresh_token, refresh_exp = create_refresh_token(username)
-    refresh_max = int((refresh_exp - refresh_exp.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds() or (7*24*3600))
+    refresh_token, refresh_exp = create_refresh_token()
     # Simpler: set refresh cookie max-age to 7 days by default
+    # Use 'strict' SameSite for refresh tokens for better security
     resp.set_cookie(
         key='hp_refresh',
         value=refresh_token,
         httponly=True,
         secure=True,  # Always use secure cookies with HTTPS
-        samesite='lax',
+        samesite='strict',  # Strict for refresh tokens
         max_age=7*24*3600,
         path='/'
     )
@@ -430,19 +497,36 @@ def login(req: LoginRequest):
 
 
 @app.get('/auth/salt')
-def get_salt(username: Optional[str] = None):
-    """Get salt for password hashing (defaults to admin user)"""
-    # Public endpoint to return stored per-user salt (base64) for client-side PBKDF2
-    from backend.users import get_user
-    username = username or 'admin'  # Default to admin if not specified
-    user = get_user(username)
-    if not user:
-        # Return generic error to avoid username enumeration
-        raise HTTPException(status_code=404, detail='Unable to retrieve authentication parameters')
-    salt = user.get('salt')
-    if not salt:
-        raise HTTPException(status_code=404, detail='Salt not available')
-    return { 'salt': salt }
+def get_salt(request: Request = None):
+    """Get salt for admin password hashing"""
+    # Rate limiting to prevent enumeration attacks
+    if request:
+        client_ip = _get_client_ip(request)
+        if not _check_rate_limit(client_ip, "salt", MAX_SALT_REQUESTS):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please try again later."
+            )
+    
+    # Return admin salt from system_config
+    from backend.store import db_get_admin
+    import os
+    import base64
+    import time
+    
+    admin = db_get_admin()
+    
+    # Add random delay to prevent timing attacks (50-150ms)
+    time.sleep(0.05 + (int.from_bytes(os.urandom(1), 'big') / 2550))
+    
+    if not admin or not admin.get('salt'):
+        # Return a fake salt if admin not set up yet
+        import hashlib
+        fake_seed = hashlib.sha256(b"fake_salt_admin").digest()[:16]
+        fake_salt = base64.b64encode(fake_seed).decode()
+        return { 'salt': fake_salt }
+    
+    return { 'salt': admin.get('salt') }
 
 
 # (original definitions moved earlier in the file)
@@ -479,19 +563,10 @@ def refresh_endpoint(request: Request):
     refresh = request.cookies.get('hp_refresh')
     if not refresh:
         raise HTTPException(status_code=401, detail='Missing refresh token')
-    username = verify_refresh_token(refresh)
-    if not username:
+    if not verify_refresh_token(refresh):
         raise HTTPException(status_code=401, detail='Invalid or expired refresh token')
-    # Determine role from simple user store
-    role = check_credentials(username, None) if False else None
-    # We don't have plaintext password; instead, read the user's record role
-    from backend.users import get_user
-    user = get_user(username)
-    if not user:
-        raise HTTPException(status_code=401, detail='User not found')
-    role = user.get('role')
-    # issue new access token
-    new_token = create_access_token(sub=username, role=role)
+    # Issue new access token for admin
+    new_token = create_access_token()
     resp = JSONResponse(content={"access_token": new_token, "token_type": "bearer"})
     max_age = ACCESS_TOKEN_EXPIRE_MIN * 60
     resp.set_cookie('hp_token', new_token, httponly=True, secure=not S.debug, samesite='strict', max_age=max_age, path='/')
@@ -499,7 +574,7 @@ def refresh_endpoint(request: Request):
 
 @app.get("/auth/me", response_model=UserInfo)
 def me(user: UserInfo = Depends(get_current_user)):
-    # Return current user info from JWT.
+    # Return current user info (simplified - just authenticated status).
     return user
 
 
@@ -541,7 +616,7 @@ def ack_alert(alert_id: str, user: UserInfo = Depends(get_current_user)):
     # Require authentication to acknowledge alerts.
     if not acknowledge_alert(alert_id):
         raise HTTPException(status_code=404, detail="Alert not found")
-    return {"ok": True, "acknowledged": alert_id, "by": user.username}
+    return {"ok": True, "acknowledged": alert_id}
 
 
 # Device Discovery and Management Endpoints

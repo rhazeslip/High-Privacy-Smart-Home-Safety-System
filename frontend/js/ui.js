@@ -2,6 +2,14 @@
 const ui = {
     pages: ['dashboard', 'devices', 'history', 'settings'],
     
+    // Security: HTML escape function to prevent XSS
+    escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        const div = document.createElement('div');
+        div.textContent = String(str);
+        return div.innerHTML;
+    },
+    
     // Navigation
     initNavigation() {
         document.querySelectorAll('.nav-item').forEach(item => {
@@ -75,17 +83,17 @@ const ui = {
     // Alerts
     renderAlert(alert) {
         return `
-            <div class="alert-item ${alert.level.toLowerCase()}">
-                <div class="alert-icon ${alert.level.toLowerCase()}">
+            <div class="alert-item ${this.escapeHtml(alert.level).toLowerCase()}">
+                <div class="alert-icon ${this.escapeHtml(alert.level).toLowerCase()}">
                     ${this.getAlertIcon(alert.level)}
                 </div>
                 <div class="alert-content">
-                    <div class="alert-title">${alert.title || 'Alert'}</div>
-                    <div class="alert-message">${alert.message}</div>
+                    <div class="alert-title">${this.escapeHtml(alert.title) || 'Alert'}</div>
+                    <div class="alert-message">${this.escapeHtml(alert.message)}</div>
                     <div class="alert-meta">
-                        ${alert.location} • ${new Date(alert.created_at).toLocaleString()}
+                        ${this.escapeHtml(alert.location)} • ${new Date(alert.created_at).toLocaleString()}
                         ${!alert.acknowledged ? `
-                            <button class="alert-ack-btn" data-alert-id="${alert.id}">
+                            <button class="alert-ack-btn" data-alert-id="${this.escapeHtml(alert.id)}">
                                 Acknowledge
                             </button>
                         ` : '<span class="acknowledged-badge">Acknowledged</span>'}
@@ -126,23 +134,23 @@ const ui = {
         return `
             <div class="device-card">
                 <div class="device-header">
-                    <span class="device-name">${deviceName}</span>
+                    <span class="device-name">${this.escapeHtml(deviceName)}</span>
                     <span class="device-status ${device.online ? 'online' : device.paired ? 'offline' : 'unpaired'}">
                         ${device.online ? 'Online' : device.paired ? 'Offline' : 'Unpaired'}
                     </span>
                 </div>
                 <div class="device-info">
-                    <div class="device-type">${device.type.toUpperCase()}</div>
-                    <div class="device-location">${device.location}</div>
+                    <div class="device-type">${this.escapeHtml(device.type).toUpperCase()}</div>
+                    <div class="device-location">${this.escapeHtml(device.location)}</div>
                 </div>
                 <div class="device-reading">
                     <div class="reading-label">Current Value</div>
-                    <div class="reading-value">${valueDisplay}</div>
+                    <div class="reading-value">${this.escapeHtml(valueDisplay)}</div>
                 </div>
                 <div class="device-details">
                     <div class="detail-item">
                         <div class="detail-label">Battery</div>
-                        <div class="detail-value">${device.battery || 100}%</div>
+                        <div class="detail-value">${this.escapeHtml(device.battery || 100)}%</div>
                     </div>
                     <div class="detail-item">
                         <div class="detail-label">Last Update</div>
@@ -150,7 +158,7 @@ const ui = {
                     </div>
                 </div>
                 <div class="device-actions">
-                    <button class="device-edit-btn" data-device-id="${device.device_id || device.id}" data-device='${JSON.stringify(device).replace(/'/g, "&apos;")}'>
+                    <button class="device-edit-btn" data-device-id="${this.escapeHtml(device.device_id || device.id)}" data-device='${this.escapeHtml(JSON.stringify(device))}'>
                         Edit
                     </button>
                 </div>
@@ -177,14 +185,14 @@ const ui = {
         return `
             <div class="dashboard-device-item">
                 <div class="dashboard-device-header">
-                    <span class="dashboard-device-name">${deviceName}</span>
+                    <span class="dashboard-device-name">${this.escapeHtml(deviceName)}</span>
                     <span class="device-status ${device.online ? 'online' : 'offline'}">
                         ${device.online ? 'Online' : 'Offline'}
                     </span>
                 </div>
                 <div class="dashboard-device-info">
-                    <span class="dashboard-device-type">${device.type.toUpperCase()}</span>
-                    <span class="dashboard-device-value">${valueDisplay}</span>
+                    <span class="dashboard-device-type">${this.escapeHtml(device.type).toUpperCase()}</span>
+                    <span class="dashboard-device-value">${this.escapeHtml(valueDisplay)}</span>
                 </div>
             </div>
         `;
@@ -196,12 +204,12 @@ const ui = {
             <tr>
                 <td>${new Date(entry.created_at).toLocaleString()}</td>
                 <td>
-                    <span class="badge ${entry.level.toLowerCase()}">
-                        ${entry.level}
+                    <span class="badge ${this.escapeHtml(entry.level).toLowerCase()}">
+                        ${this.escapeHtml(entry.level)}
                     </span>
                 </td>
-                <td>${entry.location}</td>
-                <td>${entry.message}</td>
+                <td>${this.escapeHtml(entry.location)}</td>
+                <td>${this.escapeHtml(entry.message)}</td>
                 <td>${entry.acknowledged ? 'Acknowledged' : 'Open'}</td>
             </tr>
         `;

@@ -56,6 +56,21 @@
             <label>Recovery Key <input id="reset-recovery-key" type="text" required placeholder="Enter recovery key from setup"></label>
             <label>New Password <input id="reset-new-password" type="password" autocomplete="new-password" minlength="8" required></label>
             <label>Confirm Password <input id="reset-confirm-password" type="password" autocomplete="new-password" minlength="8" required></label>
+            <div class="password-strength-container" id="reset-password-strength">
+              <div class="password-strength-bar">
+                <div class="password-strength-fill" id="reset-password-strength-fill"></div>
+              </div>
+              <div class="password-strength-text" id="reset-password-strength-text"></div>
+              <div class="password-requirements">
+                <ul>
+                  <li id="reset-req-length">At least 8 characters</li>
+                  <li id="reset-req-uppercase">Contains uppercase letter</li>
+                  <li id="reset-req-lowercase">Contains lowercase letter</li>
+                  <li id="reset-req-number">Contains number</li>
+                  <li id="reset-req-special">Contains special character</li>
+                </ul>
+              </div>
+            </div>
             <div><button type="submit">Reset Password</button></div>
             <div class="error" id="reset-error"></div>
           </form>
@@ -82,16 +97,27 @@
             <!-- Step 2: Admin Password -->
             <div class="wizard-step hidden" id="setup-step-2">
               <h2>Step 2: Set Admin Password</h2>
-              <p>Create a strong password to secure your system. This password will be required to access the system.</p>
               <div class="input-group">
-                <label for="setup-password">Admin Password (min 8 characters)</label>
-                <input type="password" id="setup-password" autocomplete="new-password" minlength="8" required>
+                <input type="password" id="setup-password" autocomplete="new-password" minlength="8" placeholder="Password" required>
               </div>
               <div class="input-group">
-                <label for="setup-confirm-password">Confirm Password</label>
-                <input type="password" id="setup-confirm-password" autocomplete="new-password" minlength="8" required>
+                <input type="password" id="setup-confirm-password" autocomplete="new-password" minlength="8" placeholder="Confirm Password" required>
               </div>
-              <div class="password-strength" id="password-strength"></div>
+              <div class="password-strength-container" id="password-strength">
+                <div class="password-strength-bar">
+                  <div class="password-strength-fill" id="password-strength-fill"></div>
+                </div>
+                <div class="password-strength-text" id="password-strength-text"></div>
+                <div class="password-requirements">
+                  <ul>
+                    <li id="req-length">At least 8 characters</li>
+                    <li id="req-uppercase">Contains uppercase letter</li>
+                    <li id="req-lowercase">Contains lowercase letter</li>
+                    <li id="req-number">Contains number</li>
+                    <li id="req-special">Contains special character</li>
+                  </ul>
+                </div>
+              </div>
               <div class="wizard-actions">
                 <button class="btn-secondary" id="setup-step-2-back">Back</button>
                 <button class="btn-primary" id="setup-step-2-complete">Complete Setup</button>
@@ -283,6 +309,21 @@
                 Confirm New Password
                 <input id="setting-confirm-password" type="password" autocomplete="new-password" minlength="8" required>
               </label>
+              <div class="password-strength-container" id="settings-password-strength">
+                <div class="password-strength-bar">
+                  <div class="password-strength-fill" id="settings-password-strength-fill"></div>
+                </div>
+                <div class="password-strength-text" id="settings-password-strength-text"></div>
+                <div class="password-requirements">
+                  <ul>
+                    <li id="settings-req-length">At least 8 characters</li>
+                    <li id="settings-req-uppercase">Contains uppercase letter</li>
+                    <li id="settings-req-lowercase">Contains lowercase letter</li>
+                    <li id="settings-req-number">Contains number</li>
+                    <li id="settings-req-special">Contains special character</li>
+                  </ul>
+                </div>
+              </div>
               <div class="error" id="password-change-error"></div>
               <button type="submit" class="btn-primary">Update Password</button>
             </form>
